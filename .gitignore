@@ -2,3 +2,11 @@
 web/node_modules/
 web/dist/
 data/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.crt
+secrets*
+credentials*
