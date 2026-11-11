@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { MapInfo, StateMsg } from '../protocol'
 import { drawCanvas } from '../draw'
 import { cellFromPoint, fitCell } from '../layout'
+import { aimAction } from '../input'
 
 export type AimPhase = 'down' | 'move' | 'up'
 
@@ -53,11 +54,30 @@ export function Grid({ map, state, youId, ascii, onAim }: Props) {
     const r = e.currentTarget.getBoundingClientRect()
     return cellFromPoint(e.clientX - r.left, e.clientY - r.top, cell, 0, 0, map.width, map.height)
   }
-  const release = () => {
+  const release = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (e) {
+      try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* not captured */ }
+    }
     if (!pressed.current) return
     pressed.current = false
     onAim('up', null, false)
   }
+  const releaseRef = useRef(release)
+  releaseRef.current = release
+
+  // A press must not outlive the window losing focus or the tab hiding.
+  useEffect(() => {
+    const stop = () => releaseRef.current()
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') stop()
+    }
+    window.addEventListener('blur', stop)
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      window.removeEventListener('blur', stop)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [])
 
   return (
     <div ref={wrap} className="gridwrap">
@@ -73,15 +93,18 @@ export function Grid({ map, state, youId, ascii, onAim }: Props) {
           if (e.button !== 0) return
           const c = cellAt(e)
           if (!c) return
+          try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* unsupported */ }
           pressed.current = true
           onAim('down', c, e.shiftKey)
         }}
         onPointerMove={(e) => {
-          if (pressed.current) onAim('move', cellAt(e), e.shiftKey)
+          const a = aimAction(e.buttons, pressed.current)
+          if (a === 'release') release(e)
+          else if (a === 'aim') onAim('move', cellAt(e), e.shiftKey)
         }}
         onPointerUp={release}
         onPointerCancel={release}
-        onPointerLeave={release}
+        onPointerLeave={() => release()}
       />
     </div>
   )

@@ -64,3 +64,10 @@ export function releaseKey(h: HeldState, key: string): void {
     if (d !== undefined) h.moves = h.moves.filter((m) => m !== d)
   }
 }
+
+// aimAction decides what a pointermove means: aim while the primary button is
+// down, release a stale press when it is not, ignore moves when not pressed.
+export function aimAction(buttons: number, pressed: boolean): 'aim' | 'release' | 'ignore' {
+  if (!pressed) return 'ignore'
+  return (buttons & 1) === 0 ? 'release' : 'aim'
+}

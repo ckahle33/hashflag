@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { arrowsDir, clearHeld, heldIntent, newHeld, pressKey, releaseKey, snapDir } from './input'
+import { aimAction, arrowsDir, clearHeld, heldIntent, newHeld, pressKey, releaseKey, snapDir } from './input'
 
 describe('snapDir', () => {
   it('maps all eight octants, y grows downward', () => {
@@ -99,5 +99,20 @@ describe('heldIntent', () => {
     clearHeld(h)
     expect(heldIntent(h)).toBeNull()
     expect(h.shift).toBe(false)
+  })
+})
+
+describe('aimAction', () => {
+  it('releases when the button is no longer down', () => {
+    expect(aimAction(0, true)).toBe('release')
+    expect(aimAction(2, true)).toBe('release')
+  })
+  it('aims while the primary button is down', () => {
+    expect(aimAction(1, true)).toBe('aim')
+    expect(aimAction(3, true)).toBe('aim')
+  })
+  it('ignores moves when not pressed', () => {
+    expect(aimAction(0, false)).toBe('ignore')
+    expect(aimAction(1, false)).toBe('ignore')
   })
 })
