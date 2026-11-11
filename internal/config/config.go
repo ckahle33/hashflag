@@ -212,7 +212,9 @@ func loadChain(dir, id string, seen map[string]bool) (map[string]any, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber() // keep integers exact (e.g. 64-bit seeds)
+	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("config %q: %w", id, err)
 	}
 	parent, _ := m["extends"].(string)

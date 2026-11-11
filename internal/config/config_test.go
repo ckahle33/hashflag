@@ -163,3 +163,18 @@ func TestLoadStandardPreset(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 }
+
+func TestResolveLargeSeedExact(t *testing.T) {
+	dir := t.TempDir()
+	writeCfg(t, dir, "base", `{"id":"base","name":"Base","map":{"obstacles":{"generate":"scatter","seed":9007199254740993}}}`)
+	writeCfg(t, dir, "kid", `{"id":"kid","name":"Kid","extends":"base"}`)
+	for _, id := range []string{"base", "kid"} {
+		c, err := Resolve(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Map.Obstacles.Seed == nil || *c.Map.Obstacles.Seed != 9007199254740993 {
+			t.Errorf("%s: seed altered: %v", id, c.Map.Obstacles.Seed)
+		}
+	}
+}
