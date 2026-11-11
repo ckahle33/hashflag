@@ -543,9 +543,6 @@ func (w *World) applyTags(hits []hit, events *[]Event) {
 	}
 }
 
-// resolvePlacements is step 6a: wall placement (Task 5).
-func (w *World) resolvePlacements(intents map[PlayerID]Intent, events *[]Event) {}
-
 // refillAmmo is step 7.
 func (w *World) refillAmmo() {
 	for _, id := range w.order {
