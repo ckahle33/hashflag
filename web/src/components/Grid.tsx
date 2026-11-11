@@ -1,30 +1,45 @@
 import { useEffect, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { MapInfo, StateMsg } from '../protocol'
-import { cellSizeFor, drawCanvas } from '../draw'
+import { drawCanvas } from '../draw'
+import { cellFromPoint, fitCell } from '../layout'
+
+export type AimPhase = 'down' | 'move' | 'up'
 
 interface Props {
   map: MapInfo
   state: StateMsg
   youId: string
   ascii: boolean
+  // Pointer aiming: the grid cell under the pointer (null when outside).
+  onAim: (phase: AimPhase, cell: { x: number; y: number } | null, shift: boolean) => void
 }
 
-export function Grid({ map, state, youId, ascii }: Props) {
+export function Grid({ map, state, youId, ascii, onAim }: Props) {
   const wrap = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
-  const [width, setWidth] = useState(800)
+  const pressed = useRef(false)
+  const [avail, setAvail] = useState({ w: 800, h: 600 })
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1)
 
   useEffect(() => {
     const el = wrap.current
     if (!el) return
-    const update = () => setWidth(el.clientWidth || 800)
+    const update = () => {
+      setAvail({ w: el.clientWidth, h: el.clientHeight })
+      setDpr(window.devicePixelRatio || 1)
+    }
     update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
     window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', update)
+    }
   }, [])
 
-  const cell = cellSizeFor(width, map.width)
-  const dpr = window.devicePixelRatio || 1
+  const cell = fitCell(avail.w, avail.h, map.width, map.height)
 
   useEffect(() => {
     const c = canvas.current
@@ -34,15 +49,39 @@ export function Grid({ map, state, youId, ascii }: Props) {
     drawCanvas(ctx, map, state, youId, cell, ascii)
   }, [map, state, youId, cell, ascii, dpr])
 
+  const cellAt = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    return cellFromPoint(e.clientX - r.left, e.clientY - r.top, cell, 0, 0, map.width, map.height)
+  }
+  const release = () => {
+    if (!pressed.current) return
+    pressed.current = false
+    onAim('up', null, false)
+  }
+
   return (
     <div ref={wrap} className="gridwrap">
       <canvas
         ref={canvas}
-        width={map.width * cell * dpr}
-        height={map.height * cell * dpr}
+        width={Math.round(map.width * cell * dpr)}
+        height={Math.round(map.height * cell * dpr)}
         style={{ width: map.width * cell, height: map.height * cell }}
         role="img"
         aria-label="Game map. Use the HUD text for scores and status."
+        onContextMenu={(e) => e.preventDefault()}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return
+          const c = cellAt(e)
+          if (!c) return
+          pressed.current = true
+          onAim('down', c, e.shiftKey)
+        }}
+        onPointerMove={(e) => {
+          if (pressed.current) onAim('move', cellAt(e), e.shiftKey)
+        }}
+        onPointerUp={release}
+        onPointerCancel={release}
+        onPointerLeave={release}
       />
     </div>
   )

@@ -1,27 +1,23 @@
-import type { MapInfo, StateMsg } from './protocol'
+import type { MapInfo, PlayerState, RoleName, StateMsg } from './protocol'
 import { composeGrid, cellChar } from './render'
 import { BG, FLOOR, OBSTACLE, RING, SAFE, TEAM_COLOR, TEAM_TINT } from './palette'
 
-export const MIN_CELL = 8
-export const MAX_CELL = 20
+const EMOJI_FONT = 'system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif'
 
-export function cellSizeFor(width: number, cols: number): number {
-  return Math.max(MIN_CELL, Math.min(MAX_CELL, Math.floor(width / Math.max(1, cols))))
+// Role defaults for players whose faction has no glyph.
+const ROLE_GLYPH = { attacker: '\u{1F3C3}', defender: '\u{1F6E1}\uFE0F' } as const
+
+export function playerGlyph(p: { glyph: string; role: RoleName }): string {
+  return p.glyph || ROLE_GLYPH[p.role]
+}
+
+// emojiSize is about 0.85 of the cell, never larger than the cell.
+export function emojiSize(cell: number): number {
+  return Math.max(1, Math.min(cell, Math.floor(cell * 0.85)))
 }
 
 function inRect(r: { x0: number; y0: number; x1: number; y1: number }, x: number, y: number) {
   return x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1
-}
-
-function stick(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) {
-  const u = s / 10
-  ctx.beginPath()
-  ctx.arc(cx, cy - 3 * u, 1.6 * u, 0, Math.PI * 2)
-  ctx.moveTo(cx, cy - 1.4 * u); ctx.lineTo(cx, cy + 1.8 * u) // body
-  ctx.moveTo(cx - 2.2 * u, cy); ctx.lineTo(cx + 2.2 * u, cy) // arms
-  ctx.moveTo(cx, cy + 1.8 * u); ctx.lineTo(cx - 1.8 * u, cy + 4 * u) // legs
-  ctx.moveTo(cx, cy + 1.8 * u); ctx.lineTo(cx + 1.8 * u, cy + 4 * u)
-  ctx.stroke()
 }
 
 function flagGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string) {
@@ -35,6 +31,36 @@ function flagGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, s: numbe
   ctx.moveTo(x + s * 0.3, y + s * 0.12); ctx.lineTo(x + s * 0.85, y + s * 0.33); ctx.lineTo(x + s * 0.3, y + s * 0.54)
   ctx.closePath()
   ctx.fill()
+}
+
+function drawPlayer(
+  ctx: CanvasRenderingContext2D, p: PlayerState, px: number, py: number, cell: number, isMe: boolean,
+): void {
+  const cx = px + cell / 2, cy = py + cell / 2
+  const color = TEAM_COLOR[p.team]
+  ctx.save()
+  ctx.globalAlpha = p.out ? 0.35 : 1
+  if (!p.out) {
+    ctx.strokeStyle = color
+    ctx.lineWidth = Math.max(1, Math.min(2, cell / 6))
+    ctx.beginPath()
+    ctx.arc(cx, cy, cell * 0.44, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+  ctx.font = `${emojiSize(cell)}px ${EMOJI_FONT}`
+  ctx.fillStyle = '#fff'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(playerGlyph(p), cx, cy + cell * 0.04)
+  if (p.hasFlag) flagGlyph(ctx, px + cell * 0.35, py - cell * 0.4, cell * 0.8, color)
+  if (isMe) {
+    ctx.strokeStyle = RING
+    ctx.lineWidth = Math.max(2, Math.min(3, cell / 5))
+    ctx.beginPath()
+    ctx.arc(cx, cy, cell * 0.5, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+  ctx.restore()
 }
 
 export function drawCanvas(
@@ -58,7 +84,7 @@ export function drawCanvas(
     }
   }
 
-  let me: { px: number; py: number } | null = null
+  let me: { p: PlayerState; px: number; py: number } | null = null
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
       const c = grid[y][x]
@@ -101,31 +127,14 @@ export function drawCanvas(
           flagGlyph(ctx, px, py, cell, color)
           break
         case 'player':
-        case 'you': {
-          const p = c.player!
-          ctx.globalAlpha = p.out ? 0.35 : 1
-          ctx.fillStyle = color
-          ctx.strokeStyle = color
-          ctx.lineWidth = Math.max(1, cell / 10)
-          if (p.glyph) {
-            ctx.fillStyle = '#fff'
-            ctx.fillText(p.glyph, cx, cy)
-            ctx.fillStyle = color
-          } else {
-            stick(ctx, cx, cy, cell)
-          }
-          if (p.hasFlag) flagGlyph(ctx, px + cell * 0.35, py - cell * 0.35, cell * 0.8, color)
-          ctx.globalAlpha = 1
-          if (c.kind === 'you') me = { px, py }
+          drawPlayer(ctx, c.player!, px, py, cell, false)
           break
-        }
+        case 'you':
+          me = { p: c.player!, px, py }
+          break
       }
     }
   }
-  // Local player ring is drawn last so it is always on top.
-  if (me) {
-    ctx.strokeStyle = RING
-    ctx.lineWidth = 2
-    ctx.strokeRect(me.px + 1, me.py + 1, cell - 2, cell - 2)
-  }
+  // The local player is drawn last so it is always on top.
+  if (me) drawPlayer(ctx, me.p, me.px, me.py, cell, true)
 }

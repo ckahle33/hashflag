@@ -9,6 +9,11 @@ export interface Intent {
 // Dir values are 0..7 clockwise from north.
 const DIRS: Record<string, number> = { w: 0, e: 1, d: 2, c: 3, s: 4, z: 5, a: 6, q: 7 }
 
+// moveDirForKey is the direction for a WASD/QEZC key, or undefined.
+export function moveDirForKey(key: string): number | undefined {
+  return DIRS[key.toLowerCase()]
+}
+
 export const DIR_NAMES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 
 // keyToIntent maps a key press to the next pending prefix and an optional

@@ -64,13 +64,16 @@ Run one with `-config tactical`. `tickMs` accepts 20 to 5000.
 | Key | Action |
 | --- | --- |
 | W, E, D, C, S, Z, A, Q | Move N, NE, E, SE, S, SW, W, NW |
+| Arrow keys | Throw N, E, S, W; two arrows together throw diagonally |
+| Shift + arrow keys | Place a wall in that direction |
+| Click on the map | Throw toward the pointer (octant from your cell); Shift + click places a wall |
 | F then a direction key | Throw in that direction |
 | B then a direction key | Place a wall in that direction (defenders, inside their own base) |
 | Space or X | Stay |
 | Escape | Cancel a pending F or B |
 | T | Toggle the ASCII view |
 
-One action counts per tick; the last one sent before the tick wins.
+Holding a key or the mouse button repeats the action every tick (a throw beats a move). One action counts per tick; the last one sent before the tick wins.
 
 ## Tests
 

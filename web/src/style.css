@@ -13,10 +13,14 @@ input { font: inherit; color: var(--fg); background: #10151d; border: 1px solid 
 .big { flex: 1 1 200px; font-size: 18px; padding: 18px 12px; }
 .banner { background: #5a3b00; padding: 4px 8px; border-radius: 4px; margin: 4px 0; }
 .notice { background: #2a3347; padding: 6px 10px; border-radius: 4px; }
-.hud { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 8px; }
-.legend { color: var(--muted); font-size: 13px; }
-.gridwrap { width: 100%; overflow: hidden; }
-canvas { display: block; background: var(--bg); max-width: 100%; }
+.hud { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 0; padding: 2px 0; font-size: 13px; }
+.legend { color: var(--muted); font-size: 12px; margin: 0; }
+.legend summary { cursor: pointer; }
+.legend p { margin: 2px 0 4px; }
+.play { max-width: none; height: 100vh; height: 100dvh; padding: 4px 8px; display: flex; flex-direction: column; overflow: hidden; }
+.play .banner, .play .notice { margin: 2px 0; }
+.gridwrap { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+canvas { display: block; background: var(--bg); flex: none; touch-action: none; }
 .factions { list-style: none; padding: 0; }
 .factions li { padding: 4px 0; }
 .sideA { color: var(--a); }
