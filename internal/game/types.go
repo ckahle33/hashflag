@@ -83,6 +83,7 @@ type Player struct {
 	OutLeft      int
 	HasFlag      bool
 	WallsPlaced  int
+	SafeTicks    int // consecutive ticks ended on the safe line
 }
 
 // Out reports whether the player is currently tagged out.

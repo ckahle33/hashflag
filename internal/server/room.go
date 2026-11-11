@@ -155,8 +155,18 @@ func (r *Room) Run(ctx context.Context) {
 	}
 }
 
+// logTickTiming logs the current round's tick timing summary and resets it.
+func (r *Room) logTickTiming() {
+	if n, mean, p95, max := r.tickTimes.summary(); n > 0 {
+		ms := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+		log.Printf("server: round %d tick timing: ticks=%d mean=%.2fms p95=%.2fms max=%.2fms", r.round, n, ms(mean), ms(p95), ms(max))
+	}
+	r.tickTimes.reset()
+}
+
 func (r *Room) shutdown() {
 	close(r.done)
+	r.logTickTiming() // partial round, so a short run still reports timing
 	if r.board != nil {
 		if err := r.board.Save(); err != nil {
 			log.Printf("server: saving board: %v", err)
@@ -392,11 +402,7 @@ func (r *Room) endRound(team game.Team, now time.Time) {
 		}
 	}
 
-	if n, mean, p95, max := r.tickTimes.summary(); n > 0 {
-		ms := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
-		log.Printf("server: round %d tick timing: ticks=%d mean=%.2fms p95=%.2fms max=%.2fms", r.round, n, ms(mean), ms(p95), ms(max))
-	}
-	r.tickTimes.reset()
+	r.logTickTiming()
 
 	for id := range r.world.Players {
 		r.world.RemovePlayer(id)

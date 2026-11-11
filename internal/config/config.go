@@ -48,10 +48,11 @@ type MapConfig struct {
 }
 
 type Obstacles struct {
-	Generate string   `json:"generate"`
-	Density  float64  `json:"density"`
-	Seed     *int64   `json:"seed"`
-	Rows     []string `json:"rows"`
+	Generate    string   `json:"generate"`
+	Density     float64  `json:"density"`
+	ClusterSize int      `json:"clusterSize"` // mean blob radius in cells ("clusters" only)
+	Seed        *int64   `json:"seed"`
+	Rows        []string `json:"rows"`
 }
 
 type Movement struct {
@@ -75,9 +76,11 @@ type Ammo struct {
 }
 
 type Tag struct {
-	OutTicks       int    `json:"outTicks"`
-	RespawnAt      string `json:"respawnAt"`
-	SafeOnSafeLine bool   `json:"safeOnSafeLine"`
+	OutTicks         int    `json:"outTicks"`
+	RespawnAt        string `json:"respawnAt"`
+	SafeOnSafeLine   bool   `json:"safeOnSafeLine"`
+	SafeLineMaxTicks int    `json:"safeLineMaxTicks"` // 0 = unlimited immunity
+
 }
 
 type Flag struct {
@@ -157,11 +160,11 @@ func Defaults() Config {
 		TickMs: 1000, RoundTicks: 300, MaxPerTeam: 100,
 		Win: Win{Mode: "mostCapturesAtTime", Captures: 3},
 		Map: MapConfig{Width: 120, Height: 50, SafeLineWidth: 2, BaseSize: 9,
-			Obstacles: Obstacles{Generate: "scatter", Density: 0.12}},
+			Obstacles: Obstacles{Generate: "clusters", Density: 0.25, ClusterSize: 8}},
 		Movement:    Movement{CellsPerTick: 1, Diagonals: true},
 		Projectile:  Projectile{CellsPerTick: 2, RangeCells: 14, CooldownTicks: 2},
 		Ammo:        Ammo{Max: 10, RefillPerTick: 1, RefillWhere: "ownBase"},
-		Tag:         Tag{OutTicks: 10, RespawnAt: "ownBase", SafeOnSafeLine: true},
+		Tag:         Tag{OutTicks: 10, RespawnAt: "ownBase", SafeOnSafeLine: true, SafeLineMaxTicks: 3},
 		Flag:        Flag{CarrierCellsPerTick: 1, AutoReturnTicks: intp(30)},
 		Walls:       Walls{Enabled: true, PerPlayer: 1, TeamCap: 20, HitsToBreak: 1, PlaceRangeCells: 1, PlaceZone: "ownBase", MustLeavePath: true},
 		TeamBalance: TeamBalance{MaxRoleSkewPct: 60, AutoBalanceTeams: true},
@@ -279,7 +282,7 @@ func (c *Config) Validate() error {
 	if len(c.Description) > 300 {
 		v.errs = append(v.errs, errors.New("description: longer than 300 characters"))
 	}
-	v.rangeInt("tickMs", c.TickMs, 250, 5000)
+	v.rangeInt("tickMs", c.TickMs, 20, 5000)
 	v.rangeInt("roundTicks", c.RoundTicks, 30, 3600)
 	v.rangeInt("maxPerTeam", c.MaxPerTeam, 1, 100)
 
@@ -294,9 +297,10 @@ func (c *Config) Validate() error {
 	if m.Obstacles.Rows != nil {
 		v.unimplemented("map.obstacles.rows")
 	}
-	if m.Obstacles.Generate != "scatter" {
-		v.unimplemented("map.obstacles.generate (only \"scatter\" is supported)")
+	if g := m.Obstacles.Generate; g != "scatter" && g != "clusters" {
+		v.unimplemented("map.obstacles.generate (only \"scatter\" and \"clusters\" are supported)")
 	}
+	v.rangeInt("map.obstacles.clusterSize", m.Obstacles.ClusterSize, 2, 25)
 	if m.Obstacles.Density < 0 || m.Obstacles.Density > 0.4 {
 		v.errs = append(v.errs, fmt.Errorf("map.obstacles.density: %v out of range 0..0.4", m.Obstacles.Density))
 	}
@@ -307,6 +311,7 @@ func (c *Config) Validate() error {
 	validateWalls(v, "walls", c.Walls)
 
 	v.rangeInt("tag.outTicks", c.Tag.OutTicks, 1, 120)
+	v.rangeInt("tag.safeLineMaxTicks", c.Tag.SafeLineMaxTicks, 0, 600)
 	v.enum("tag.respawnAt", c.Tag.RespawnAt, "ownBase", "ownFlag")
 	if c.Tag.RespawnAt != "ownBase" {
 		v.unimplemented("tag.respawnAt (only \"ownBase\" is supported)")

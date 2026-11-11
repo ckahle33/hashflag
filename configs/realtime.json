@@ -1,0 +1,1 @@
+{"id":"realtime","name":"Realtime (100 ms, experimental)","extends":"standard","tickMs":100,"roundTicks":3000,"tag":{"outTicks":30,"safeLineMaxTicks":30},"projectile":{"cooldownTicks":6,"rangeCells":20},"flag":{"autoReturnTicks":300}}

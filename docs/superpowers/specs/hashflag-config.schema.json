@@ -10,7 +10,7 @@
     "description": { "type": "string", "maxLength": 300 },
     "extends":     { "type": "string", "description": "id of a preset to deep-merge over; omit for full defaults" },
 
-    "tickMs":        { "type": "integer", "minimum": 250, "maximum": 5000, "default": 1000 },
+    "tickMs":        { "type": "integer", "minimum": 20, "maximum": 5000, "default": 1000 },
     "roundTicks":    { "type": "integer", "minimum": 30, "maximum": 3600, "default": 300 },
     "maxPerTeam":    { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 },
 
@@ -32,8 +32,12 @@
         "obstacles": {
           "oneOf": [
             { "type": "object", "required": ["generate"], "additionalProperties": false,
-              "properties": { "generate": { "enum": ["scatter", "mazeish", "chokepoints"] },
-                              "density":  { "type": "number", "minimum": 0, "maximum": 0.4, "default": 0.12 },
+              "properties": { "generate": { "enum": ["scatter", "clusters", "mazeish", "chokepoints"], "default": "clusters",
+                                            "description": "scatter = independent single cells; clusters = large irregular blobs that block the straight lane to each flag. mazeish and chokepoints are not implemented in v1" },
+                              "density":  { "type": "number", "minimum": 0, "maximum": 0.4, "default": 0.25,
+                                            "description": "scatter: per-cell obstacle probability; clusters: target fraction of eligible cells covered" },
+                              "clusterSize": { "type": "integer", "minimum": 2, "maximum": 25, "default": 8,
+                                               "description": "clusters only: mean blob radius in cells; components smaller than this many cells are pruned" },
                               "seed":     { "type": ["integer", "null"], "default": null } } },
             { "type": "object", "required": ["rows"], "additionalProperties": false,
               "properties": { "rows": { "type": "array", "items": { "type": "string" },
@@ -77,7 +81,9 @@
       "properties": {
         "outTicks":       { "type": "integer", "minimum": 1, "maximum": 120, "default": 10 },
         "respawnAt":      { "enum": ["ownBase", "ownFlag"], "default": "ownBase" },
-        "safeOnSafeLine": { "type": "boolean", "default": true }
+        "safeOnSafeLine": { "type": "boolean", "default": true },
+        "safeLineMaxTicks": { "type": "integer", "minimum": 0, "maximum": 600, "default": 3,
+                              "description": "safe-line immunity lasts this many consecutive ticks on the line, then the player can be tagged there; stepping off resets the count; 0 = unlimited" }
       }
     },
 

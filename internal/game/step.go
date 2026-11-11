@@ -113,6 +113,7 @@ func (w *World) AddPlayer(p Player) *Player {
 	np := p
 	np.Pos = pos
 	np.Ammo = w.statsFor(&np).ammo.Max
+	np.SafeTicks = 0
 	w.Players[np.ID] = &np
 	i := sort.Search(len(w.order), func(i int) bool { return w.order[i] >= np.ID })
 	w.order = append(w.order, "")
@@ -237,11 +238,37 @@ func (w *World) onSafeLine(p Pos) bool {
 	return p.X >= w.Map.SafeX0 && p.X <= w.Map.SafeX1
 }
 
+// immune reports whether p is protected by the safe line: on it, with
+// safeOnSafeLine set, and not past the safeLineMaxTicks dwell limit (0 means
+// unlimited).
+func (w *World) immune(p *Player) bool {
+	t := w.Cfg.Tag
+	return t.SafeOnSafeLine && w.onSafeLine(p.Pos) &&
+		(t.SafeLineMaxTicks == 0 || p.SafeTicks <= t.SafeLineMaxTicks)
+}
+
+// updateSafeTicks counts consecutive ticks each in-world player has ended
+// its move on the safe line, resetting to 0 off the line.
+func (w *World) updateSafeTicks() {
+	for _, id := range w.order {
+		p := w.Players[id]
+		if p.Out() {
+			continue
+		}
+		if w.onSafeLine(p.Pos) {
+			p.SafeTicks++
+		} else {
+			p.SafeTicks = 0
+		}
+	}
+}
+
 // Step resolves one tick and returns the events it produced. Order is fixed:
 //
 //  1. Decrement timers (cooldowns, out-time); out players whose time reaches
 //     0 respawn at their own base with full ammo.
-//  2. Resolve moves, cell by cell, all movers in lock-step.
+//  2. Resolve moves, cell by cell, all movers in lock-step, then update
+//     each player's safe-line dwell counter (SafeTicks).
 //  3. Launch throws; a projectile spawns at the thrower's cell.
 //  4. Advance every projectile cell by cell, including ones thrown this
 //     tick, breaking walls and recording hits.
@@ -257,6 +284,7 @@ func (w *World) Step(intents map[PlayerID]Intent) []Event {
 	var events []Event
 	w.decrementTimers()
 	w.resolveMoves(intents)
+	w.updateSafeTicks()
 	w.launchThrows(intents)
 	hits := w.advanceProjectiles(&events)
 	w.applyTags(hits, &events)
@@ -292,6 +320,7 @@ func (w *World) respawn(p *Player) {
 	p.Pos = pos
 	p.Ammo = w.statsFor(p).ammo.Max
 	p.CooldownLeft = 0
+	p.SafeTicks = 0
 }
 
 // mover is a player taking part in move resolution this tick.
@@ -443,8 +472,8 @@ type hit struct{ victim, owner PlayerID }
 // advanceProjectiles is step 4. Projectiles advance in slice order. Each
 // checks every cell it enters: it vanishes at an edge or obstacle; deals one
 // hit to a wall and vanishes; hits eligible players in the cell (enemies, or
-// anyone but the thrower with friendly fire; players on the safe line are
-// passed over) and vanishes unless piercing; and vanishes on reaching its
+// anyone but the thrower with friendly fire; players immune on the safe line
+// are passed over) and vanishes unless piercing; and vanishes on reaching its
 // range. A non-piercing projectile hits only the first eligible player in a
 // cell (lowest PlayerID). An in-flight projectile (Traveled > 0) first
 // checks its starting cell, since players moved earlier this tick may have
@@ -459,7 +488,6 @@ func (w *World) advanceProjectiles(events *[]Event) []hit {
 			at[p.Pos] = append(at[p.Pos], p)
 		}
 	}
-	safe := w.Cfg.Tag.SafeOnSafeLine
 	var hits []hit
 	kept := w.Projectiles[:0]
 	for _, pr := range w.Projectiles {
@@ -471,11 +499,8 @@ func (w *World) advanceProjectiles(events *[]Event) []hit {
 		// hitAt records hits on eligible players at c (at[c] is in sorted ID
 		// order) and reports whether the projectile survives.
 		hitAt := func(c Pos) bool {
-			if safe && w.onSafeLine(c) {
-				return true
-			}
 			for _, v := range at[c] {
-				if v.ID == pr.Owner || (v.Team == pr.Team && !ff) {
+				if v.ID == pr.Owner || (v.Team == pr.Team && !ff) || w.immune(v) {
 					continue
 				}
 				hits = append(hits, hit{victim: v.ID, owner: pr.Owner})

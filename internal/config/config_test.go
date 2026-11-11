@@ -26,14 +26,14 @@ func TestDefaultsMatchSpec(t *testing.T) {
 	if p.CellsPerTick != 2 || p.RangeCells != 14 || p.CooldownTicks != 2 || p.Pierce || p.FriendlyFire {
 		t.Errorf("projectile: %+v", p)
 	}
-	if c.Tag.OutTicks != 10 || c.Tag.RespawnAt != "ownBase" || !c.Tag.SafeOnSafeLine {
+	if c.Tag.OutTicks != 10 || c.Tag.RespawnAt != "ownBase" || !c.Tag.SafeOnSafeLine || c.Tag.SafeLineMaxTicks != 3 {
 		t.Errorf("tag: %+v", c.Tag)
 	}
 	m := c.Map
 	if m.SafeLineWidth != 2 || m.Width != 120 || m.Height != 50 || m.BaseSize != 9 {
 		t.Errorf("map: %+v", m)
 	}
-	if m.Obstacles.Generate != "scatter" || m.Obstacles.Density != 0.12 {
+	if m.Obstacles.Generate != "clusters" || m.Obstacles.Density != 0.25 || m.Obstacles.ClusterSize != 8 {
 		t.Errorf("obstacles: %+v", m.Obstacles)
 	}
 	f := c.Flag
@@ -96,11 +96,37 @@ func TestResolveCycleDetected(t *testing.T) {
 }
 
 func TestValidateBounds(t *testing.T) {
-	c := Defaults()
-	c.TickMs = 100
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "tickMs") {
-		t.Errorf("tickMs: %v", err)
+	for _, tc := range []struct {
+		field string
+		mod   func(*Config)
+		ok    bool
+	}{
+		{"tickMs", func(c *Config) { c.TickMs = 10 }, false},
+		{"tickMs", func(c *Config) { c.TickMs = 20 }, true},
+		{"tickMs", func(c *Config) { c.TickMs = 5001 }, false},
+		{"tag.safeLineMaxTicks", func(c *Config) { c.Tag.SafeLineMaxTicks = -1 }, false},
+		{"tag.safeLineMaxTicks", func(c *Config) { c.Tag.SafeLineMaxTicks = 0 }, true},
+		{"tag.safeLineMaxTicks", func(c *Config) { c.Tag.SafeLineMaxTicks = 600 }, true},
+		{"tag.safeLineMaxTicks", func(c *Config) { c.Tag.SafeLineMaxTicks = 601 }, false},
+		{"map.obstacles.clusterSize", func(c *Config) { c.Map.Obstacles.ClusterSize = 1 }, false},
+		{"map.obstacles.clusterSize", func(c *Config) { c.Map.Obstacles.ClusterSize = 2 }, true},
+		{"map.obstacles.clusterSize", func(c *Config) { c.Map.Obstacles.ClusterSize = 25 }, true},
+		{"map.obstacles.clusterSize", func(c *Config) { c.Map.Obstacles.ClusterSize = 26 }, false},
+		{"map.obstacles.generate", func(c *Config) { c.Map.Obstacles.Generate = "scatter" }, true},
+		{"map.obstacles.generate", func(c *Config) { c.Map.Obstacles.Generate = "clusters" }, true},
+		{"map.obstacles.generate", func(c *Config) { c.Map.Obstacles.Generate = "chokepoints" }, false},
+	} {
+		c := Defaults()
+		tc.mod(&c)
+		err := c.Validate()
+		if tc.ok && err != nil {
+			t.Errorf("%s: want valid, got %v", tc.field, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), tc.field)) {
+			t.Errorf("%s: want error naming the field, got %v", tc.field, err)
+		}
 	}
+	c := Defaults()
 	c = Defaults()
 	c.MaxPerTeam = 101
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "maxPerTeam") {
@@ -175,6 +201,44 @@ func TestResolveLargeSeedExact(t *testing.T) {
 		}
 		if c.Map.Obstacles.Seed == nil || *c.Map.Obstacles.Seed != 9007199254740993 {
 			t.Errorf("%s: seed altered: %v", id, c.Map.Obstacles.Seed)
+		}
+	}
+}
+
+func TestAllPresetsResolve(t *testing.T) {
+	const dir = "../../configs"
+	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no presets found: %v", err)
+	}
+	got := map[string]*Config{}
+	for _, f := range files {
+		id := strings.TrimSuffix(filepath.Base(f), ".json")
+		c, err := Resolve(dir, id)
+		if err != nil {
+			t.Errorf("%s: %v", id, err)
+			continue
+		}
+		if c.ID != id {
+			t.Errorf("%s: id field is %q", id, c.ID)
+		}
+		got[id] = c
+	}
+	for _, id := range []string{"standard", "tactical", "realtime"} {
+		if got[id] == nil {
+			t.Errorf("preset %q missing", id)
+		}
+	}
+	if c := got["tactical"]; c != nil {
+		if c.TickMs != 300 || c.RoundTicks != 1000 || c.Tag.OutTicks != 10 || c.Tag.SafeLineMaxTicks != 10 ||
+			c.Projectile.CooldownTicks != 3 || c.Projectile.RangeCells != 14 || *c.Flag.AutoReturnTicks != 100 {
+			t.Errorf("tactical: %+v", c)
+		}
+	}
+	if c := got["realtime"]; c != nil {
+		if c.TickMs != 100 || c.RoundTicks != 3000 || c.Tag.OutTicks != 30 || c.Tag.SafeLineMaxTicks != 30 ||
+			c.Projectile.CooldownTicks != 6 || c.Projectile.RangeCells != 20 || *c.Flag.AutoReturnTicks != 300 {
+			t.Errorf("realtime: %+v", c)
 		}
 	}
 }

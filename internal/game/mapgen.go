@@ -15,12 +15,20 @@ const maxMapAttempts = 20
 // centered in the map. When Width-SafeLineWidth is odd, SafeX0 is rounded
 // down ((Width-SafeLineWidth)/2), so the band sits one column left of exact
 // center and the column just right of it stays obstacle-free to keep the map
-// mirrored. Obstacles are generated for the left half and mirrored.
-// If a flag is unreachable from the safe line, it retries with seed+1, up to
-// 20 attempts in total, then returns an error.
+// mirrored. Obstacles are generated for the left half and mirrored, by
+// "scatter" (independent single cells) or "clusters" (large blobs, see
+// clusters). If an attempt is rejected by the generator or a flag is
+// unreachable from the safe line, it retries with seed+1, up to 20 attempts
+// in total, then returns an error.
 func GenerateMap(cfg config.MapConfig, seed int64) (*Map, error) {
 	o := cfg.Obstacles
-	if o.Generate != "scatter" {
+	var gen func(m *Map, seed int64) ([][]bool, bool)
+	switch o.Generate {
+	case "scatter":
+		gen = func(m *Map, seed int64) ([][]bool, bool) { return scatter(m, o.Density, seed), true }
+	case "clusters":
+		gen = func(m *Map, seed int64) ([][]bool, bool) { return clusters(m, o.Density, o.ClusterSize, seed) }
+	default:
 		return nil, fmt.Errorf("unsupported obstacle generator %q", o.Generate)
 	}
 	if len(o.Rows) > 0 {
@@ -52,20 +60,21 @@ func GenerateMap(cfg config.MapConfig, seed int64) (*Map, error) {
 	m.FlagB = Pos{(m.BaseB.X0 + m.BaseB.X1) / 2, (m.BaseB.Y0 + m.BaseB.Y1) / 2}
 
 	for attempt := 0; attempt < maxMapAttempts; attempt++ {
-		m.Obstacle = scatter(m, o.Density, seed+int64(attempt))
+		obs, ok := gen(m, seed+int64(attempt))
+		if !ok {
+			continue
+		}
+		m.Obstacle = obs
 		if flagReachable(m, m.FlagA) && flagReachable(m, m.FlagB) {
 			return m, nil
 		}
 	}
-	return nil, fmt.Errorf("no map with reachable flags after %d attempts", maxMapAttempts)
+	return nil, fmt.Errorf("no map with reachable flags and no sealed pockets after %d attempts", maxMapAttempts)
 }
 
 func scatter(m *Map, density float64, seed int64) [][]bool {
 	rng := rand.New(rand.NewSource(seed))
-	obs := make([][]bool, m.Height)
-	for y := range obs {
-		obs[y] = make([]bool, m.Width)
-	}
+	obs := newGrid(m.Width, m.Height)
 	for y := 0; y < m.Height; y++ {
 		for x := 0; x < m.SafeX0; x++ {
 			p := Pos{x, y}
