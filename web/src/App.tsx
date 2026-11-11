@@ -116,12 +116,17 @@ export function App() {
     }
   }, [phase, send])
 
-  const { conn, error, dismissError } = game
+  const { conn, error, dismissError, reconnect } = game
   const prefixLabel = prefix === 'f' ? 'THROW: press a direction (Esc cancels)' : 'WALL: press a direction (Esc cancels)'
 
   const notices = (
     <>
-      {conn !== 'open' && <p role="status" className="banner">Reconnecting...</p>}
+      {conn === 'replaced' && (
+        <p role="alert" className="banner">
+          This session was opened in another tab. <button onClick={reconnect}>Reconnect</button>
+        </p>
+      )}
+      {conn !== 'open' && conn !== 'replaced' && <p role="status" className="banner">Reconnecting...</p>}
       {error && (
         <p role="alert" className="notice">
           {error} <button onClick={dismissError}>Dismiss</button>

@@ -3,9 +3,14 @@ import type {
   ClientMsg, LobbyMsg, MapInfo, RoundEndMsg, StateMsg, YouInfo, YouMsg,
 } from './protocol'
 import { parseServerMsg } from './protocol'
-import { getItem, removeItem, setItem } from './storage'
+import { shouldReconnect } from './reconnect'
+import {
+  getItem, getSessionItem, removeSessionItem, setItem, setSessionItem,
+} from './storage'
 
-export type Conn = 'connecting' | 'open' | 'reconnecting'
+// 'replaced' means another tab took this session over; we stay offline until
+// the player asks to reconnect.
+export type Conn = 'connecting' | 'open' | 'reconnecting' | 'replaced'
 export type Phase = 'lobby' | 'playing'
 
 export interface GameState {
@@ -55,7 +60,7 @@ export function useGame() {
     s.onopen = () => {
       attempt.current = 0
       setG((p) => ({ ...p, conn: 'open' }))
-      const token = getItem(TOKEN_KEY) ?? undefined
+      const token = getSessionItem(TOKEN_KEY) ?? undefined
       send({ t: 'hello', token, name: getItem(NAME_KEY) ?? '' })
     }
     s.onmessage = (ev) => {
@@ -64,7 +69,7 @@ export function useGame() {
       setG((p) => {
         switch (m.t) {
           case 'welcome':
-            setItem(TOKEN_KEY, m.token)
+            setSessionItem(TOKEN_KEY, m.token)
             return { ...p, playerId: m.playerId }
           case 'lobby':
             return { ...p, lobby: m }
@@ -84,8 +89,12 @@ export function useGame() {
         }
       })
     }
-    s.onclose = () => {
+    s.onclose = (ev) => {
       if (closed.current || ws.current !== s) return
+      if (!shouldReconnect(ev.code, ev.reason)) {
+        setG((p) => ({ ...p, conn: 'replaced' }))
+        return
+      }
       setG((p) => ({ ...p, conn: 'reconnecting' }))
       timer.current = window.setTimeout(connect, backoffMs(attempt.current++))
     }
@@ -105,7 +114,7 @@ export function useGame() {
   // A new name needs a fresh identity: drop the token and reconnect.
   const rename = useCallback((name: string) => {
     setItem(NAME_KEY, name)
-    removeItem(TOKEN_KEY)
+    removeSessionItem(TOKEN_KEY)
     setG({ ...initial, conn: 'reconnecting' })
     const old = ws.current
     ws.current = null
@@ -114,8 +123,15 @@ export function useGame() {
     connect()
   }, [connect])
 
+  const reconnect = useCallback(() => {
+    attempt.current = 0
+    window.clearTimeout(timer.current)
+    setG((p) => ({ ...p, conn: 'reconnecting' }))
+    connect()
+  }, [connect])
+
   const dismissError = useCallback(() => setG((p) => ({ ...p, error: null })), [])
 
   const phase: Phase = g.lobby?.inWorld && g.map && g.state ? 'playing' : 'lobby'
-  return { ...g, phase, send, rename, dismissError }
+  return { ...g, phase, send, rename, reconnect, dismissError }
 }
