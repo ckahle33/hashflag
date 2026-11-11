@@ -42,7 +42,22 @@ A preset is a JSON file in the config directory; select it with `-config <id>`. 
 }
 ```
 
-The full list of fields, types and bounds is in [docs/superpowers/specs/hashflag-config.schema.json](docs/superpowers/specs/hashflag-config.schema.json). Some schema fields are not implemented yet (for example explicit obstacle rows, non-scatter map generators, and non-default `respawnAt`, `refillWhere` and `placeZone` values). The server rejects a config that sets them, with an error naming the field, rather than silently ignoring them.
+The full list of fields, types and bounds is in [docs/superpowers/specs/hashflag-config.schema.json](docs/superpowers/specs/hashflag-config.schema.json). Two fields worth knowing:
+
+- `tag.safeLineMaxTicks` (default 3): the safe line protects a player only for this many consecutive ticks; after that they can be tagged while standing on it. Stepping off resets the count. `0` keeps the old unlimited immunity.
+- `map.obstacles.generate`: `"clusters"` (default) places large irregular blobs covering about `density` (default 0.25) of the open field, with `clusterSize` (default 8) as the mean blob radius, and always puts one across the straight lane to each flag. `"scatter"` sprinkles single cells with probability `density`.
+
+Some schema fields are not implemented yet (for example explicit obstacle rows, the `mazeish` and `chokepoints` generators, and non-default `respawnAt`, `refillWhere` and `placeZone` values). The server rejects a config that sets them, with an error naming the field, rather than silently ignoring them.
+
+## Presets
+
+| Preset | Tick | Notes |
+| --- | --- | --- |
+| `standard` | 1000 ms | The built-in defaults: 300-tick rounds |
+| `tactical` | 300 ms | 1000-tick rounds (5 minutes); out time, safe-line limit and cooldowns scaled to the faster tick |
+| `realtime` | 100 ms | Experimental: 3000-tick rounds; timings scaled again. Hard to play by keyboard one action per tick |
+
+Run one with `-config tactical`. `tickMs` accepts 20 to 5000.
 
 ## Controls
 
@@ -66,15 +81,15 @@ cd web && npm test
 
 ## Bot load harness
 
-`scripts/bots.go` opens N simulated players against a running server. Each bot picks a role (about 70% attackers), plays one action per tick, reconnects with its token if dropped, and prints a summary every 10 seconds and at the end: bots connected, frames per second, intents sent, captures seen, and the gaps between state frames as seen by a sample of 10 bots.
+`scripts/bots.go` opens N simulated players against a running server. Each bot picks a role (about 70% attackers), plays one action per tick, reconnects with its token if dropped, and prints a summary every 10 seconds and at the end: bots connected, frames per second, intents sent, captures and tags seen, the share of bot samples standing on the safe line (`onSafeLine`), and the gaps between state frames as seen by a sample of 10 bots.
 
 ```
 go run -tags bots ./scripts -n 200 -addr ws://127.0.0.1:8080/ws -duration 90s
 go test -tags bots ./scripts
 ```
 
-The server logs a line when a tick takes over 100 ms (at most one per second) and a timing summary (ticks, mean, p95, max) at the end of every round.
+The server logs a line when a tick takes over 100 ms (at most one per second) and a timing summary (ticks, mean, p95, max) at the end of every round and on shutdown.
 
 ## Status
 
-The canvas look has not been tuned and game balance is untested. The bot harness is a load tool, not a balance test: in the runs recorded while building it, bots completed no captures on the default map and one on a shrunken map with short-range throws.
+The canvas look has not been tuned and game balance is untested. The bot harness is a load tool, not a balance test. Attackers follow a BFS path around obstacles; defenders hover by their flag. In a 120 s run of 40 bots on the `tactical` preset they tagged each other steadily and spent about 1% of their time on the safe line, but completed no captures.
