@@ -17,6 +17,12 @@ const (
 	minHalfReach = 0.9
 	// maxBlobs caps blob placement per attempt.
 	maxBlobs = 400
+	// overshootTol is how far past the target coverage (as a share of the
+	// eligible cells) one blob may push it before it is scaled down.
+	overshootTol = 0.04
+	// maxCoverageOver rejects an attempt whose final coverage, after pocket
+	// filling, exceeds density by more than this.
+	maxCoverageOver = 0.07
 )
 
 // clusterEligible reports whether a left-half cell may hold a cluster
@@ -40,10 +46,14 @@ func clusterEligible(m *Map) func(Pos) bool {
 // Steps: (1) a blob straddling the flag row between the base clearance and
 // the safe band, so no straight horizontal run to the flag exists on rows
 // flagY-1..flagY+1; (2) more blobs, radius around size*(0.6..1.4), shrunk
-// near the end, until about density of the eligible cells are covered;
-// (3) prune obstacle components smaller than size cells; (4) mirror;
-// (5) require each flag to reach at least 90% of its half's free cells, and
-// fill the remaining unreachable pockets so nobody can spawn in them.
+// near the end and capped by the eligible area's extent, until about density
+// of the eligible cells are covered (a blob that would overshoot by more
+// than overshootTol is scaled down, or dropped); (3) prune obstacle
+// components smaller than size cells (or than the largest blob the extent
+// allows, if smaller); (4) mirror; (5) require each flag to reach at least
+// 90% of its half's free cells, and fill the remaining unreachable pockets
+// so nobody can spawn in them, rejecting the attempt if that pushes
+// coverage past density+maxCoverageOver.
 func clusters(m *Map, density float64, size int, seed int64) ([][]bool, bool) {
 	obs := newGrid(m.Width, m.Height)
 	if density <= 0 {
@@ -65,29 +75,58 @@ func clusters(m *Map, density float64, size int, seed int64) ([][]bool, bool) {
 		return obs, true
 	}
 	target := int(density*float64(len(cells)) + 0.5)
+	tol := int(overshootTol * float64(len(cells)))
 	covered := 0
-	paint := func(p Pos) {
-		if elig(p) && !obs[p.Y][p.X] {
-			obs[p.Y][p.X] = true
-			covered++
-		}
-	}
 
 	laneX0, laneX1 := m.BaseA.X1+baseClearance+1, m.SafeX0-safeClearance-1
 	hasLane := laneX0 <= laneX1
+	// Cap blob radii by the eligible extent so one blob cannot fill (and
+	// seal) a narrow strip.
+	extent := m.SafeX0 - safeClearance
+	if hasLane {
+		extent = laneX1 - laneX0 + 1
+	}
+	capR := max(1, min(float64(extent)/2, float64(m.Height)/4))
+
+	// place adds a blob at c, scaling it down while it would overshoot the
+	// target by more than tol. The lane blob is always placed, at its
+	// smallest scale if need be.
+	place := func(c Pos, r float64, lane bool) {
+		shape := blobShape(rng, r, lane)
+		for scale := 1.0; ; scale *= 0.75 {
+			fresh := map[Pos]bool{}
+			renderBlob(c, shape, scale, lane, func(p Pos) {
+				if elig(p) && !obs[p.Y][p.X] {
+					fresh[p] = true
+				}
+			})
+			last := r*scale < 1
+			if covered+len(fresh) <= target+tol || (lane && last) {
+				for p := range fresh {
+					obs[p.Y][p.X] = true
+				}
+				covered += len(fresh)
+				return
+			}
+			if last {
+				return
+			}
+		}
+	}
+
 	if hasLane {
 		c := Pos{laneX0 + rng.Intn(laneX1-laneX0+1), m.FlagA.Y}
-		blob(rng, c, blobRadius(rng, size, target-covered), true, paint)
+		place(c, blobRadius(rng, size, target-covered, capR), true)
 	}
 	for i := 0; covered < target && i < maxBlobs; i++ {
 		c := cells[rng.Intn(len(cells))]
 		for try := 0; try < 20 && obs[c.Y][c.X]; try++ {
 			c = cells[rng.Intn(len(cells))]
 		}
-		blob(rng, c, blobRadius(rng, size, target-covered), false, paint)
+		place(c, blobRadius(rng, size, target-covered, capR), false)
 	}
 
-	pruneSmall(obs, m.SafeX0, size)
+	pruneSmall(obs, m.SafeX0, min(size, max(2, int(capR*capR))))
 	if hasLane && !laneBlocked(obs, m.FlagA.Y, laneX0, laneX1) {
 		return nil, false
 	}
@@ -98,7 +137,16 @@ func clusters(m *Map, density float64, size int, seed int64) ([][]bool, bool) {
 			}
 		}
 	}
-	return obs, sealPockets(m, obs)
+	if !sealPockets(m, obs) {
+		return nil, false
+	}
+	final := 0
+	for _, p := range cells {
+		if obs[p.Y][p.X] {
+			final++
+		}
+	}
+	return obs, float64(final) <= (density+maxCoverageOver)*float64(len(cells))
 }
 
 func newGrid(w, h int) [][]bool {
@@ -110,34 +158,48 @@ func newGrid(w, h int) [][]bool {
 }
 
 // blobRadius draws a radius around size*(0.6..1.4), shrunk when the blob
-// would overshoot the remaining coverage need by a lot.
-func blobRadius(rng *rand.Rand, size, need int) float64 {
+// would overshoot the remaining coverage need by a lot, and never above capR.
+func blobRadius(rng *rand.Rand, size, need int, capR float64) float64 {
 	r := float64(size) * (0.6 + 0.8*rng.Float64())
 	// A blob of 3-5 ellipses with axes 0.5..1 r covers roughly 2.2 r^2 cells.
 	if 2.2*r*r > float64(need) {
 		r = math.Sqrt(float64(max(need, 0)) / 2.2)
 	}
-	return max(r, 1.5, 0.35*float64(size))
+	return min(max(r, 1.5, 0.35*float64(size)), capR)
 }
 
-// blob paints the union of 3-5 rotated ellipses around c. Every ellipse
-// contains c, so the blob is connected. With lane set, the first ellipse is
-// axis-aligned and at least 1.5 cells tall in each direction, so it covers
-// rows c.Y-1..c.Y+1 at column c.X.
-func blob(rng *rand.Rand, c Pos, r float64, lane bool, paint func(Pos)) {
+// blobEllipse is one ellipse of a blob, relative to the blob centre.
+type blobEllipse struct{ dx, dy, rx, ry, theta float64 }
+
+// blobShape draws the union of 3-5 rotated ellipses of radius about r.
+// Every ellipse contains the centre, so the blob is connected.
+func blobShape(rng *rand.Rand, r float64, lane bool) []blobEllipse {
 	k := 3 + rng.Intn(3)
+	shape := make([]blobEllipse, 0, k)
 	for i := 0; i < k; i++ {
-		rx := r * (0.5 + 0.5*rng.Float64())
-		ry := r * (0.5 + 0.5*rng.Float64())
-		theta := rng.Float64() * math.Pi
-		cx, cy := float64(c.X), float64(c.Y)
+		e := blobEllipse{rx: r * (0.5 + 0.5*rng.Float64()), ry: r * (0.5 + 0.5*rng.Float64())}
+		e.theta = rng.Float64() * math.Pi
 		if i == 0 && lane {
-			ry, theta = max(ry, 1.5), 0
+			e.theta = 0
 		} else if i > 0 {
-			a, d := rng.Float64()*2*math.Pi, 0.8*min(rx, ry)*rng.Float64()
-			cx, cy = cx+d*math.Cos(a), cy+d*math.Sin(a)
+			a, d := rng.Float64()*2*math.Pi, 0.8*min(e.rx, e.ry)*rng.Float64()
+			e.dx, e.dy = d*math.Cos(a), d*math.Sin(a)
 		}
-		ellipse(cx, cy, rx, ry, theta, paint)
+		shape = append(shape, e)
+	}
+	return shape
+}
+
+// renderBlob paints shape around c, scaled. With lane set, the first
+// ellipse is axis-aligned and at least 1.5 cells tall in each direction, so
+// it covers rows c.Y-1..c.Y+1 at column c.X.
+func renderBlob(c Pos, shape []blobEllipse, scale float64, lane bool, paint func(Pos)) {
+	for i, e := range shape {
+		rx, ry := max(e.rx*scale, 0.5), max(e.ry*scale, 0.5)
+		if i == 0 && lane {
+			ry = max(ry, 1.5)
+		}
+		ellipse(float64(c.X)+e.dx*scale, float64(c.Y)+e.dy*scale, rx, ry, e.theta, paint)
 	}
 }
 

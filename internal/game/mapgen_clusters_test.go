@@ -249,3 +249,128 @@ func TestScatterStillWorks(t *testing.T) {
 		t.Fatalf("scatter produced only %d single-cell obstacles", single)
 	}
 }
+
+// clusterProps checks a generated clusters map: mirrored, both flags
+// reachable from the band, each flag reaching >= 90% of its half, and (when
+// the lane exists and density > 0) rows flagY-1..flagY+1 blocked.
+func clusterProps(m *Map, density float64) string {
+	for y := 0; y < m.Height; y++ {
+		for x := 0; x < m.Width; x++ {
+			if m.Obstacle[y][x] != m.Obstacle[y][m.Width-1-x] {
+				return "not mirrored"
+			}
+		}
+	}
+	if !reachable(m, m.FlagA) || !reachable(m, m.FlagB) {
+		return "flag unreachable"
+	}
+	for _, f := range []Pos{m.FlagA, m.FlagB} {
+		if r, n := halfReach(m, f); r*10 < n*9 {
+			return "sealed pocket"
+		}
+	}
+	x0, x1 := m.BaseA.X1+baseClearance+1, m.SafeX0-safeClearance-1
+	if density > 0 && x0 <= x1 && !laneBlocked(m.Obstacle, m.FlagA.Y, x0, x1) {
+		return "lane open"
+	}
+	return ""
+}
+
+func leftCoverage(m *Map) float64 {
+	elig := clusterEligible(m)
+	var n, c int
+	for y := 0; y < m.Height; y++ {
+		for x := 0; x < m.SafeX0; x++ {
+			if elig(Pos{x, y}) {
+				n++
+				if m.Obstacle[y][x] {
+					c++
+				}
+			}
+		}
+	}
+	return float64(c) / float64(n)
+}
+
+func smallCfg(w, h, base, safe, size int, density float64) config.MapConfig {
+	return config.MapConfig{Width: w, Height: h, SafeLineWidth: safe, BaseSize: base,
+		Obstacles: config.Obstacles{Generate: "clusters", Density: density, ClusterSize: size}}
+}
+
+func TestClustersSmallMapLargeSize(t *testing.T) {
+	for _, d := range []float64{0.4, 0.1} {
+		cfg := smallCfg(30, 10, 3, 1, 25, d)
+		ok := 0
+		for seed := int64(0); seed < 30; seed++ {
+			m, err := GenerateMap(cfg, seed)
+			if err != nil {
+				continue
+			}
+			if p := clusterProps(m, d); p != "" {
+				t.Errorf("density %v seed %d: %s", d, seed, p)
+				continue
+			}
+			ok++
+		}
+		if ok < 28 {
+			t.Errorf("density %v: %d of 30 seeds produced a valid map, want >= 28", d, ok)
+		}
+	}
+}
+
+func TestClustersValidConfigsAlwaysGenerate(t *testing.T) {
+	rows := []struct {
+		w, h, base, safe, size int
+		density                float64
+	}{
+		{20, 10, 3, 1, 2, 0.4},
+		{20, 10, 3, 1, 25, 0.4},
+		{30, 10, 3, 1, 25, 0.4},
+		{30, 12, 9, 1, 8, 0.25},
+		{40, 20, 7, 2, 8, 0.25},
+		{60, 20, 9, 2, 25, 0.25},
+		{80, 36, 9, 2, 8, 0.4},
+		{120, 50, 9, 2, 2, 0.4},
+		{120, 50, 9, 2, 25, 0.4},
+		{300, 150, 30, 10, 25, 0.4},
+	}
+	for _, r := range rows {
+		cfg := smallCfg(r.w, r.h, r.base, r.safe, r.size, r.density)
+		full := config.Defaults()
+		full.Map = cfg
+		if err := full.Validate(); err != nil {
+			t.Fatalf("%+v: test row not a valid config: %v", r, err)
+		}
+		fails := 0
+		for seed := int64(0); seed < 20; seed++ {
+			m, err := GenerateMap(cfg, seed)
+			if err != nil {
+				fails++
+				continue
+			}
+			if p := clusterProps(m, r.density); p != "" {
+				t.Errorf("%+v seed %d: %s", r, seed, p)
+			}
+			if c := leftCoverage(m); c > r.density+0.08 {
+				t.Errorf("%+v seed %d: coverage %.3f above density+0.08", r, seed, c)
+			}
+		}
+		if fails > 1 {
+			t.Errorf("%+v: %d of 20 seeds failed to generate, want <= 1", r, fails)
+		}
+	}
+}
+
+func TestClustersCoverageNotAboveMax(t *testing.T) {
+	cfg := smallCfg(60, 20, 9, 2, 25, 0.25)
+	for seed := int64(0); seed < 20; seed++ {
+		m, err := GenerateMap(cfg, seed)
+		if err != nil {
+			t.Errorf("seed %d: %v", seed, err)
+			continue
+		}
+		if c := leftCoverage(m); c > 0.25+0.08 {
+			t.Errorf("seed %d: coverage %.3f, want <= 0.33", seed, c)
+		}
+	}
+}
