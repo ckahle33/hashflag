@@ -102,6 +102,8 @@ type Room struct {
 	rs                *roundStats
 	lobbyDirty        bool
 	lastBroadcast     time.Duration // duration of the last step + broadcast
+	tickTimes         tickStats
+	slowLog           slowLogLimiter
 }
 
 // NewRoom builds a room. board and log may be nil (nothing is persisted).
@@ -271,6 +273,10 @@ func (r *Room) stepWorld(now time.Time) {
 		}
 	}
 	r.lastBroadcast = time.Since(start)
+	r.tickTimes.add(r.lastBroadcast)
+	if r.lastBroadcast > slowTick && r.slowLog.allow(time.Now()) {
+		log.Printf("server: slow tick %d: %v (limit %v, %d conns)", r.world.Tick, r.lastBroadcast, slowTick, len(r.conns))
+	}
 
 	if team, done := r.world.Winner(); done {
 		r.endRound(team, now)
@@ -385,6 +391,12 @@ func (r *Room) endRound(team game.Team, now time.Time) {
 			r.send(c, b)
 		}
 	}
+
+	if n, mean, p95, max := r.tickTimes.summary(); n > 0 {
+		ms := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+		log.Printf("server: round %d tick timing: ticks=%d mean=%.2fms p95=%.2fms max=%.2fms", r.round, n, ms(mean), ms(p95), ms(max))
+	}
+	r.tickTimes.reset()
 
 	for id := range r.world.Players {
 		r.world.RemovePlayer(id)
