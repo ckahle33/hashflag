@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hashflag game config",
+  "type": "object",
+  "required": ["id", "name"],
+  "additionalProperties": false,
+  "properties": {
+    "id":          { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "name":        { "type": "string", "maxLength": 40 },
+    "description": { "type": "string", "maxLength": 300 },
+    "extends":     { "type": "string", "description": "id of a preset to deep-merge over; omit for full defaults" },
+
+    "tickMs":        { "type": "integer", "minimum": 250, "maximum": 5000, "default": 1000 },
+    "roundTicks":    { "type": "integer", "minimum": 30, "maximum": 3600, "default": 300 },
+    "maxPerTeam":    { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 },
+
+    "win": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "mode":     { "enum": ["firstToCaptures", "mostCapturesAtTime"], "default": "mostCapturesAtTime" },
+        "captures": { "type": "integer", "minimum": 1, "maximum": 20, "default": 3 }
+      }
+    },
+
+    "map": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "width":  { "type": "integer", "minimum": 20, "maximum": 300, "default": 120 },
+        "height": { "type": "integer", "minimum": 10, "maximum": 150, "default": 50 },
+        "safeLineWidth": { "type": "integer", "minimum": 1, "maximum": 10, "default": 2 },
+        "baseSize":      { "type": "integer", "minimum": 3, "maximum": 30, "default": 9 },
+        "obstacles": {
+          "oneOf": [
+            { "type": "object", "required": ["generate"], "additionalProperties": false,
+              "properties": { "generate": { "enum": ["scatter", "mazeish", "chokepoints"] },
+                              "density":  { "type": "number", "minimum": 0, "maximum": 0.4, "default": 0.12 },
+                              "seed":     { "type": ["integer", "null"], "default": null } } },
+            { "type": "object", "required": ["rows"], "additionalProperties": false,
+              "properties": { "rows": { "type": "array", "items": { "type": "string" },
+                                        "description": "ASCII map, '#' = obstacle, mirrored for team B" } } }
+          ]
+        }
+      }
+    },
+
+    "movement": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "cellsPerTick": { "type": "integer", "minimum": 1, "maximum": 3, "default": 1 },
+        "diagonals":    { "type": "boolean", "default": true },
+        "stackable":    { "type": "boolean", "default": false, "description": "may two players share a cell" }
+      }
+    },
+
+    "projectile": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "cellsPerTick":  { "type": "integer", "minimum": 1, "maximum": 6, "default": 2 },
+        "rangeCells":    { "type": "integer", "minimum": 2, "maximum": 60, "default": 14 },
+        "cooldownTicks": { "type": "integer", "minimum": 0, "maximum": 20, "default": 2 },
+        "pierce":        { "type": "boolean", "default": false },
+        "friendlyFire":  { "type": "boolean", "default": false }
+      }
+    },
+
+    "ammo": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "max":            { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 },
+        "refillPerTick":  { "type": "integer", "minimum": 0, "maximum": 10, "default": 1 },
+        "refillWhere":    { "enum": ["ownBase", "anywhereOwnSide", "everywhere"], "default": "ownBase" }
+      }
+    },
+
+    "tag": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "outTicks":       { "type": "integer", "minimum": 1, "maximum": 120, "default": 10 },
+        "respawnAt":      { "enum": ["ownBase", "ownFlag"], "default": "ownBase" },
+        "safeOnSafeLine": { "type": "boolean", "default": true }
+      }
+    },
+
+    "flag": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "carrierCellsPerTick": { "type": "integer", "minimum": 1, "maximum": 3, "default": 1 },
+        "carrierCanThrow":     { "type": "boolean", "default": false },
+        "autoReturnTicks":     { "type": ["integer", "null"], "minimum": 5, "maximum": 300, "default": 30,
+                                 "description": "dropped flag resets home after N ticks; null = stays put" },
+        "captureNeedsOwnFlagHome": { "type": "boolean", "default": false }
+      }
+    },
+
+    "walls": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "enabled":         { "type": "boolean", "default": true },
+        "perPlayer":       { "type": "integer", "minimum": 0, "maximum": 5, "default": 1 },
+        "teamCap":         { "type": "integer", "minimum": 0, "maximum": 200, "default": 20 },
+        "hitsToBreak":     { "type": "integer", "minimum": 1, "maximum": 10, "default": 1 },
+        "decayTicks":      { "type": ["integer", "null"], "default": null },
+        "placeRangeCells": { "type": "integer", "minimum": 1, "maximum": 5, "default": 1 },
+        "placeZone":       { "enum": ["ownBase", "ownSide", "anywhere"], "default": "ownBase" },
+        "mustLeavePath":   { "type": "boolean", "default": true }
+      }
+    },
+
+    "roles": {
+      "type": "object", "additionalProperties": false,
+      "description": "per-role overrides of movement/projectile/ammo/walls",
+      "properties": {
+        "attacker": { "$ref": "#/$defs/roleOverride" },
+        "defender": { "$ref": "#/$defs/roleOverride" }
+      }
+    },
+
+    "teamBalance": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "maxRoleSkewPct": { "type": "integer", "minimum": 0, "maximum": 100, "default": 60,
+                            "description": "cap on share of a team that may pick one role" },
+        "autoBalanceTeams": { "type": "boolean", "default": true }
+      }
+    }
+  },
+
+  "$defs": {
+    "roleOverride": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "movement":   { "$ref": "#/properties/movement" },
+        "projectile": { "$ref": "#/properties/projectile" },
+        "ammo":       { "$ref": "#/properties/ammo" },
+        "walls":      { "$ref": "#/properties/walls" },
+        "spawnZone":  { "enum": ["base", "midfield", "nearFlag"] }
+      }
+    }
+  }
+}
