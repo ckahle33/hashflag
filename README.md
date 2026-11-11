@@ -71,7 +71,8 @@ Run one with `-config tactical`. `tickMs` accepts 20 to 5000.
 | B then a direction key | Place a wall in that direction (defenders, inside their own base) |
 | Space or X | Stay |
 | Escape | Cancel a pending F or B |
-| T | Toggle the ASCII view |
+| V | Switch between the tilted (default) and flat graphical views |
+| T | Toggle the ASCII view (returns to the last graphical view) |
 
 Holding a key or the mouse button repeats the action every tick (a throw beats a move). One action counts per tick; the last one sent before the tick wins.
 

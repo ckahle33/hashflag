@@ -20,7 +20,7 @@ function inRect(r: { x0: number; y0: number; x1: number; y1: number }, x: number
   return x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1
 }
 
-function flagGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string) {
+export function flagGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string) {
   ctx.strokeStyle = color
   ctx.fillStyle = color
   ctx.lineWidth = Math.max(1, s / 10)

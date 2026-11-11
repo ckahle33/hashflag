@@ -5,12 +5,18 @@ import { clearHeld, heldIntent, newHeld, pressKey, releaseKey, snapDir } from '.
 import { getItem, setItem } from './storage'
 import { Grid, type AimPhase } from './components/Grid'
 import { Lobby } from './components/Lobby'
+import { VIEW_KEY, parseView, serializeView, toggleAscii, toggleGraphical, type View } from './viewmode'
 
-const ASCII_KEY = 'hashflag.ascii'
 
 export function App() {
   const game = useGame()
-  const [ascii, setAscii] = useState(() => getItem(ASCII_KEY) === '1')
+  const [view, setView] = useState<View>(() => parseView(getItem(VIEW_KEY)))
+  const changeView = (f: (v: View) => View) =>
+    setView((v) => {
+      const n = f(v)
+      setItem(VIEW_KEY, serializeView(n))
+      return n
+    })
   const [prefix, setPrefix] = useState<Prefix>(null)
   const prefixRef = useRef<Prefix>(null)
   const { send, phase } = game
@@ -60,10 +66,11 @@ export function App() {
       if (shouldIgnoreKeyTarget(t)) return
       if (phase !== 'playing') return
       if (e.key === 't' || e.key === 'T') {
-        setAscii((a) => {
-          setItem(ASCII_KEY, a ? '0' : '1')
-          return !a
-        })
+        changeView(toggleAscii)
+        return
+      }
+      if (e.key === 'v' || e.key === 'V') {
+        changeView(toggleGraphical)
         return
       }
       if (e.key === 'Shift') {
@@ -137,16 +144,17 @@ export function App() {
           <span>Walls {you?.wallsPlaced ?? 0}</span>
           <span>{you?.hasFlag ? 'CARRYING THE FLAG' : 'No flag'}</span>
           {prefix && <span>{prefixLabel}</span>}
+          <span>View: {view.mode} (V tilt/flat, T text)</span>
           <span>{game.youInfo ? `${game.youInfo.team} ${game.youInfo.role}` : ''}</span>
         </section>
         {notices}
-        <Grid map={game.map} state={game.state} youId={game.playerId} ascii={ascii} onAim={onAim} />
+        <Grid map={game.map} state={game.state} youId={game.playerId} mode={view.mode} onAim={onAim} />
         <details className="legend">
           <summary>Controls</summary>
           <p>
             Move WASD, diagonals Q E Z C. Arrow keys throw (two arrows for a diagonal); Shift + arrow builds a wall.
             Click the map to throw toward the pointer; Shift + click builds a wall. Hold a key or the button to repeat.
-            F + direction throws, B + direction builds a wall. Space or X stays. Esc cancels. T toggles text mode ({ascii ? 'on' : 'off'}).
+            F + direction throws, B + direction builds a wall. Space or X stays. Esc cancels. V switches tilted and flat view, T toggles text mode ({view.mode === 'ascii' ? 'on' : 'off'}).
           </p>
         </details>
       </main>

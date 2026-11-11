@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { MapInfo, StateMsg } from '../protocol'
 import { drawCanvas } from '../draw'
+import { drawTilted } from '../drawTilted'
+import { cellFromPointTilted, fitCellTilted, tiltedSize } from '../projection'
+import type { ViewMode } from '../viewmode'
 import { cellFromPoint, fitCell } from '../layout'
 import { aimAction } from '../input'
 
@@ -11,12 +14,12 @@ interface Props {
   map: MapInfo
   state: StateMsg
   youId: string
-  ascii: boolean
+  mode: ViewMode
   // Pointer aiming: the grid cell under the pointer (null when outside).
   onAim: (phase: AimPhase, cell: { x: number; y: number } | null, shift: boolean) => void
 }
 
-export function Grid({ map, state, youId, ascii, onAim }: Props) {
+export function Grid({ map, state, youId, mode, onAim }: Props) {
   const wrap = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const pressed = useRef(false)
@@ -40,18 +43,24 @@ export function Grid({ map, state, youId, ascii, onAim }: Props) {
     }
   }, [])
 
-  const cell = fitCell(avail.w, avail.h, map.width, map.height)
+  const tilted = mode === 'tilted'
+  const cell = tilted
+    ? fitCellTilted(avail.w, avail.h, map.width, map.height)
+    : fitCell(avail.w, avail.h, map.width, map.height)
+  const size = tilted ? tiltedSize(map.width, map.height, cell) : { w: map.width * cell, h: map.height * cell }
 
   useEffect(() => {
     const c = canvas.current
     const ctx = c?.getContext('2d')
     if (!c || !ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    drawCanvas(ctx, map, state, youId, cell, ascii)
-  }, [map, state, youId, cell, ascii, dpr])
+    if (tilted) drawTilted(ctx, map, state, youId, cell)
+    else drawCanvas(ctx, map, state, youId, cell, mode === 'ascii')
+  }, [map, state, youId, cell, mode, tilted, dpr])
 
   const cellAt = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const r = e.currentTarget.getBoundingClientRect()
+    if (tilted) return cellFromPointTilted(e.clientX - r.left, e.clientY - r.top, cell, map.width, map.height)
     return cellFromPoint(e.clientX - r.left, e.clientY - r.top, cell, 0, 0, map.width, map.height)
   }
   const release = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -83,9 +92,9 @@ export function Grid({ map, state, youId, ascii, onAim }: Props) {
     <div ref={wrap} className="gridwrap">
       <canvas
         ref={canvas}
-        width={Math.round(map.width * cell * dpr)}
-        height={Math.round(map.height * cell * dpr)}
-        style={{ width: map.width * cell, height: map.height * cell }}
+        width={Math.round(size.w * dpr)}
+        height={Math.round(size.h * dpr)}
+        style={{ width: size.w, height: size.h }}
         role="img"
         aria-label="Game map. Use the HUD text for scores and status."
         onContextMenu={(e) => e.preventDefault()}
