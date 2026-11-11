@@ -21,6 +21,14 @@ import (
 const (
 	DefaultReconnectGrace = 30 * time.Second
 	DefaultIntermission   = 10 * time.Second
+	DefaultHelloTimeout   = 10 * time.Second
+	DefaultPingInterval   = 30 * time.Second
+	DefaultPingTimeout    = 10 * time.Second
+	DefaultMaxPerIP       = 20
+	DefaultMaxFactions    = 500
+	minMaxConns           = 50
+	// FactionCreateInterval is the minimum gap between one player's new factions.
+	FactionCreateInterval = 5 * time.Second
 	boardTopN             = 10
 	inboxSize             = 1024
 )
@@ -35,6 +43,13 @@ type RoomOptions struct {
 	Intermission   time.Duration // pause between rounds
 	AllowedOrigins []string      // extra WebSocket Origin patterns
 	Seed           int64         // 0 = random; otherwise deterministic maps and names
+
+	MaxConns      int           // open WebSockets in total; default 4*MaxPerTeam, at least 50
+	MaxConnsPerIP int           // open WebSockets per remote IP; default 20
+	HelloTimeout  time.Duration // a socket must send a valid hello within this; default 10s
+	PingInterval  time.Duration // keepalive ping period; default 30s
+	PingTimeout   time.Duration // a ping unanswered this long closes the socket; default 10s
+	MaxFactions   int           // live factions in total; default 500
 }
 
 // roomMsg is one item in the room inbox. Exactly one field group is set.
@@ -86,6 +101,11 @@ type Room struct {
 	inbox chan roomMsg
 	done  chan struct{} // closed when Run stops accepting messages
 
+	// Connection admission, touched from HTTP handler goroutines.
+	connMu  sync.Mutex
+	nConns  int
+	ipConns map[string]int
+
 	rng      *rand.Rand
 	conns    map[*conn]bool
 	sessions map[game.PlayerID]*session
@@ -117,6 +137,24 @@ func NewRoom(cfg *config.Config, board *factions.Board, log *stats.Logger, opts 
 	if opts.AllowedOrigins == nil {
 		opts.AllowedOrigins = DefaultAllowedOrigins
 	}
+	if opts.MaxConns <= 0 {
+		opts.MaxConns = max(minMaxConns, 4*cfg.MaxPerTeam)
+	}
+	if opts.MaxConnsPerIP <= 0 {
+		opts.MaxConnsPerIP = DefaultMaxPerIP
+	}
+	if opts.HelloTimeout <= 0 {
+		opts.HelloTimeout = DefaultHelloTimeout
+	}
+	if opts.PingInterval <= 0 {
+		opts.PingInterval = DefaultPingInterval
+	}
+	if opts.PingTimeout <= 0 {
+		opts.PingTimeout = DefaultPingTimeout
+	}
+	if opts.MaxFactions <= 0 {
+		opts.MaxFactions = DefaultMaxFactions
+	}
 	seed := opts.Seed
 	if seed == 0 {
 		seed = time.Now().UnixNano()
@@ -126,6 +164,7 @@ func NewRoom(cfg *config.Config, board *factions.Board, log *stats.Logger, opts 
 		cfg: cfg, board: board, log: log, opts: opts,
 		inbox:    make(chan roomMsg, inboxSize),
 		done:     make(chan struct{}),
+		ipConns:  map[string]int{},
 		rng:      rng,
 		conns:    map[*conn]bool{},
 		sessions: map[game.PlayerID]*session{},
@@ -226,6 +265,10 @@ func (r *Room) dropConn(c *conn, code websocket.StatusCode, reason string) {
 	if s := c.sess; s != nil && s.conn == c {
 		s.conn = nil
 		s.graceUntil = time.Now().Add(r.opts.ReconnectGrace)
+		// The slot is kept for the grace period, but the flag is not.
+		if r.inRound && r.world != nil {
+			r.record(r.world.DropFlagOf(s.id))
+		}
 		delete(r.pending, s.id)
 		r.lobbyDirty = true
 	}
@@ -480,13 +523,13 @@ func (r *Room) startRound(now time.Time) {
 		for _, m := range f.Members {
 			if s := r.sessions[m]; s != nil && s.hasRole {
 				seen[m] = true
-				r.tryEnter(s)
+				r.enterOrWait(s)
 			}
 		}
 	}
 	for _, s := range r.sessionsBySeq() {
 		if s.hasRole && !seen[s.id] {
-			r.tryEnter(s)
+			r.enterOrWait(s)
 		}
 	}
 	for c := range r.conns {

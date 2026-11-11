@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -15,12 +17,22 @@ import (
 
 const (
 	outBuffer     = 64              // queued outbound frames before a client is dropped
-	rateBurst     = 20              // token bucket size
-	ratePerSec    = 20.0            // token refill per second
+	minRate       = 20              // floor of the per-connection message limit, per second
 	discardLimit  = 64 << 10        // oversized frames above this close the connection
 	writeTimeout  = 5 * time.Second // per-frame write deadline
 	closeDeadline = 3 * time.Second // graceful close budget on shutdown
 )
+
+// rateLimitFor is the per-connection message limit (messages per second,
+// also the burst size) for a tick length. A client may send one intent per
+// state frame, so the limit scales with the tick rate: at least minRate, and
+// three times the number of ticks per second.
+func rateLimitFor(tickMs int) float64 {
+	if tickMs <= 0 {
+		return minRate
+	}
+	return math.Max(minRate, math.Ceil(3000/float64(tickMs)))
+}
 
 // conn is one WebSocket client. Its reader goroutine feeds the room inbox;
 // its writer goroutine drains out. Only the room goroutine sends on out and
@@ -30,6 +42,7 @@ type conn struct {
 	out     chan []byte
 	quit    chan struct{} // closed by kill; stops the writer
 	closing atomic.Bool
+	greeted atomic.Bool // a valid hello has been accepted
 
 	// Room-owned.
 	sess *session
@@ -64,6 +77,12 @@ func (c *conn) closeGracefully(code websocket.StatusCode, reason string) {
 func NewHub(r *Room) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, req *http.Request) {
+		ip := remoteIP(req.RemoteAddr)
+		if status := r.acquireConn(ip); status != 0 {
+			http.Error(w, http.StatusText(status), status)
+			return
+		}
+		defer r.releaseConn(ip)
 		ws, err := websocket.Accept(w, req, &websocket.AcceptOptions{
 			OriginPatterns: r.opts.AllowedOrigins,
 		})
@@ -73,6 +92,40 @@ func NewHub(r *Room) http.Handler {
 		serveConn(r, ws)
 	})
 	return mux
+}
+
+// remoteIP is the host part of a RemoteAddr. Proxy headers are not trusted.
+func remoteIP(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+// acquireConn reserves a connection slot for ip. It returns 0 on success,
+// or the HTTP status to reject with: 503 when the room is full, 429 when ip
+// has too many connections. Every success must be paired with releaseConn.
+func (r *Room) acquireConn(ip string) int {
+	r.connMu.Lock()
+	defer r.connMu.Unlock()
+	if r.nConns >= r.opts.MaxConns {
+		return http.StatusServiceUnavailable
+	}
+	if r.ipConns[ip] >= r.opts.MaxConnsPerIP {
+		return http.StatusTooManyRequests
+	}
+	r.nConns++
+	r.ipConns[ip]++
+	return 0
+}
+
+func (r *Room) releaseConn(ip string) {
+	r.connMu.Lock()
+	defer r.connMu.Unlock()
+	r.nConns--
+	if r.ipConns[ip]--; r.ipConns[ip] <= 0 {
+		delete(r.ipConns, ip)
+	}
 }
 
 // serveConn registers the connection with the room, then runs the reader
@@ -85,9 +138,37 @@ func serveConn(r *Room, ws *websocket.Conn) {
 		return
 	}
 	go c.writeLoop()
+	hello := time.AfterFunc(r.opts.HelloTimeout, func() {
+		if !c.greeted.Load() {
+			c.kill(websocket.StatusPolicyViolation, "hello timeout")
+		}
+	})
+	defer hello.Stop()
+	go c.keepAlive(r.opts.PingInterval, r.opts.PingTimeout)
 	c.readLoop(r)
 	r.post(roomMsg{closed: c})
 	c.kill(0, "") // no-op if a graceful close is already under way
+}
+
+// keepAlive pings the client every interval and closes the connection when a
+// ping goes unanswered for timeout. It stops when the connection is killed.
+func (c *conn) keepAlive(interval, timeout time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.quit:
+			return
+		case <-t.C:
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			err := c.ws.Ping(ctx)
+			cancel()
+			if err != nil {
+				c.kill(0, "")
+				return
+			}
+		}
+	}
 }
 
 func (c *conn) writeLoop() {
@@ -111,7 +192,8 @@ func (c *conn) writeLoop() {
 // or unknown frames are dropped; exceeding the rate limit closes the
 // connection with StatusPolicyViolation.
 func (c *conn) readLoop(r *Room) error {
-	tokens := float64(rateBurst)
+	rate := rateLimitFor(r.cfg.TickMs)
+	tokens := rate
 	last := time.Now()
 	buf := make([]byte, MaxFrameBytes+1)
 	for {
@@ -136,7 +218,7 @@ func (c *conn) readLoop(r *Room) error {
 		}
 
 		now := time.Now()
-		tokens = min(float64(rateBurst), tokens+now.Sub(last).Seconds()*ratePerSec)
+		tokens = min(rate, tokens+now.Sub(last).Seconds()*rate)
 		last = now
 		if tokens < 1 {
 			c.kill(websocket.StatusPolicyViolation, "rate limit exceeded")

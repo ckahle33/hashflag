@@ -84,6 +84,11 @@ type Player struct {
 	HasFlag      bool
 	WallsPlaced  int
 	SafeTicks    int // consecutive ticks ended on the safe line
+
+	// After DropFlagOf the player may not pick a flag up again from the cell
+	// they dropped it on; moving off clears the restriction.
+	noPickup    bool
+	noPickupPos Pos
 }
 
 // Out reports whether the player is currently tagged out.

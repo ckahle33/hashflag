@@ -20,15 +20,16 @@ const maxNameRunes = 20
 
 // session is a player identity that outlives individual connections.
 type session struct {
-	id         game.PlayerID
-	seq        int
-	token      string
-	name       string
-	role       game.Role
-	hasRole    bool
-	conn       *conn     // nil while disconnected
-	graceUntil time.Time // when a disconnected slot is released
-	waiting    bool      // has a role but no room on a side yet
+	id          game.PlayerID
+	seq         int
+	token       string
+	name        string
+	role        game.Role
+	hasRole     bool
+	conn        *conn     // nil while disconnected
+	graceUntil  time.Time // when a disconnected slot is released
+	waiting     bool      // has a role but no room on a side yet
+	lastFaction time.Time // when this player last created a faction
 }
 
 func newToken() string {
@@ -92,6 +93,16 @@ func (r *Room) handleClient(c *conn, m ClientMsg) {
 	case TypeSetRole:
 		r.setRole(s, m.Role)
 	case TypeCreateFaction:
+		now := time.Now()
+		if !s.lastFaction.IsZero() && now.Sub(s.lastFaction) < FactionCreateInterval {
+			r.sendError(c, "slow down: one new faction every 5 seconds")
+			return
+		}
+		if len(r.reg.List()) >= r.opts.MaxFactions {
+			r.sendError(c, "too many factions right now; join an existing one")
+			return
+		}
+		s.lastFaction = now
 		team, _ := lobby.AssignTeam(r.plannedCounts(), r.cfg.MaxPerTeam)
 		r.reg.Create(s.id, team)
 	case TypeJoinFaction:
@@ -142,6 +153,7 @@ func (r *Room) hello(c *conn, m ClientMsg) {
 	s.conn = c
 	s.graceUntil = time.Time{}
 	c.sess = s
+	c.greeted.Store(true)
 	r.sendJSON(c, WelcomeMsg{T: TypeWelcome, Token: s.token, PlayerID: string(s.id)})
 	r.sendLobbyNow(s)
 	if r.inRound {
@@ -202,6 +214,16 @@ func (r *Room) roleCounts(t game.Team) map[game.Role]int {
 	return n
 }
 
+// enterOrWait admits s to a new round if it is connected. A player in their
+// reconnect grace is held on the waiting list and admitted once they return.
+func (r *Room) enterOrWait(s *session) {
+	if s.conn == nil {
+		s.waiting = true
+		return
+	}
+	r.tryEnter(s)
+}
+
 // tryEnter puts s into the current round. On failure s waits and reason
 // explains why ("" when there is simply no round running).
 func (r *Room) tryEnter(s *session) (bool, string) {
@@ -246,7 +268,7 @@ func (r *Room) tryEnter(s *session) (bool, string) {
 // admitWaiting retries waiting players in join order.
 func (r *Room) admitWaiting() {
 	for _, s := range r.sessionsBySeq() {
-		if !s.waiting {
+		if !s.waiting || s.conn == nil {
 			continue
 		}
 		if ok, _ := r.tryEnter(s); ok {

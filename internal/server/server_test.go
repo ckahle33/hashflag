@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -329,7 +331,9 @@ func TestFloodDisconnects(t *testing.T) {
 	h := newHarness(t, testConfig(), RoomOptions{})
 	c := h.dial(t)
 	c.hello("flooder", "")
-	for i := 0; i < 60; i++ {
+	// A flood at ten times the limit (150/s at a 20 ms tick) for 2 s.
+	stop := time.Now().Add(2 * time.Second)
+	for time.Now().Before(stop) {
 		if c.sendRaw([]byte(`{"t":"intent","kind":"stay"}`)) != nil {
 			break
 		}
@@ -340,6 +344,36 @@ func TestFloodDisconnects(t *testing.T) {
 	}
 	if s := websocket.CloseStatus(err); s != websocket.StatusPolicyViolation {
 		t.Fatalf("close status = %v (%v), want policy violation", s, err)
+	}
+}
+
+func TestRateLimitScalesWithTick(t *testing.T) {
+	for tick, want := range map[int]float64{20: 150, 50: 60, 100: 30, 150: 20, 1000: 20, 0: 20} {
+		if got := rateLimitFor(tick); got != want {
+			t.Errorf("rateLimitFor(%d) = %v, want %v", tick, got, want)
+		}
+	}
+}
+
+// A hold-to-repeat client sends about one intent per tick; at the 20 ms tick
+// floor that is 50/s, and even 140/s must not trip the limiter.
+func TestSustainedRateWithinLimitNotClosed(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{})
+	c := h.dial(t)
+	c.hello("holder", "")
+	tk := time.NewTicker(20 * time.Millisecond)
+	defer tk.Stop()
+	stop := time.Now().Add(2 * time.Second)
+	for time.Now().Before(stop) {
+		<-tk.C
+		for i := 0; i < 3; i++ { // 150/s nominal, a little under after jitter
+			if err := c.sendRaw([]byte(`{"t":"intent","kind":"stay"}`)); err != nil {
+				t.Fatalf("send failed (closed?): %v", err)
+			}
+		}
+	}
+	if err := c.waitClosed(100 * time.Millisecond); err != nil {
+		t.Fatalf("connection closed: %v", err)
 	}
 }
 
@@ -529,7 +563,7 @@ func TestCaptureCreditsCapturersFaction(t *testing.T) {
 func TestTwoHundredBotsOneTick(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.TickMs = 100
-	h := newHarness(t, &cfg, RoomOptions{})
+	h := newHarness(t, &cfg, RoomOptions{MaxConns: 300, MaxConnsPerIP: 300})
 	clients := make([]*client, 200)
 	var wg sync.WaitGroup
 	for i := range clients {
@@ -597,4 +631,219 @@ func TestForeignOriginRejected(t *testing.T) {
 		t.Fatalf("localhost origin rejected: %v", err)
 	}
 	ws.CloseNow()
+}
+
+func TestCarrierDisconnectDropsFlagImmediately(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{ReconnectGrace: time.Minute})
+	c := h.dial(t)
+	w := c.enter("runner", "attacker")
+	pid := game.PlayerID(w.PlayerID)
+	var at game.Pos
+	h.room.do(func() {
+		wd := h.room.world
+		p := wd.Players[pid]
+		p.Pos = game.Pos{X: wd.Map.BaseA.X1 + 3, Y: wd.Map.FlagA.Y}
+		p.HasFlag = true
+		wd.Flags[game.TeamB].Carrier = pid
+		wd.Flags[game.TeamB].Pos = p.Pos
+		h.room.rs.carryStart[pid] = wd.Tick
+		at = p.Pos
+	})
+	c.ws.CloseNow()
+	h.eventually(t, 2*time.Second, func(r *Room) bool { return r.sessions[pid].conn == nil })
+	time.Sleep(100 * time.Millisecond) // a few ticks: the dropper must not re-pick it up
+	h.room.do(func() {
+		r := h.room
+		f := r.world.Flags[game.TeamB]
+		if f.Carrier != "" || f.Pos != at {
+			t.Errorf("flag = %+v, want dropped at %v", f, at)
+		}
+		p := r.world.Players[pid]
+		if p == nil || p.HasFlag {
+			t.Errorf("player should keep the slot without the flag: %+v", p)
+		}
+		if _, open := r.rs.carryStart[pid]; open || r.rs.carryCount != 1 {
+			t.Errorf("carry should be closed: open=%v count=%d", open, r.rs.carryCount)
+		}
+	})
+}
+
+func TestGraceDisconnectedPlayerSkippedForNewRound(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxPerTeam = 1
+	cfg.TeamBalance.MaxRoleSkewPct = 100
+	h := newHarness(t, cfg, RoomOptions{ReconnectGrace: time.Minute})
+	a := h.dial(t)
+	wa := a.enter("a", "attacker")
+	pa := game.PlayerID(wa.PlayerID)
+	a.ws.CloseNow()
+	h.eventually(t, 2*time.Second, func(r *Room) bool { return r.sessions[pa].conn == nil })
+
+	h.room.do(func() { h.room.startRound(time.Now()) })
+	h.room.do(func() {
+		r := h.room
+		if r.world.Players[pa] != nil {
+			t.Error("disconnected player was admitted to the new round")
+		}
+		if !r.sessions[pa].waiting {
+			t.Error("disconnected player should wait for their return")
+		}
+		r.admitWaiting()
+		if r.world.Players[pa] != nil {
+			t.Error("admitWaiting took a disconnected player")
+		}
+	})
+	// With one place per side, both live players still get in.
+	b, c := h.dial(t), h.dial(t)
+	b.enter("b", "attacker")
+	c.enter("c", "attacker")
+}
+
+func rawDial(h *harness) (*websocket.Conn, *http.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return websocket.Dial(ctx, "ws"+strings.TrimPrefix(h.srv.URL, "http")+"/ws", nil)
+}
+
+func (h *harness) connCounts() (int, int) {
+	h.room.connMu.Lock()
+	defer h.room.connMu.Unlock()
+	return h.room.nConns, len(h.room.ipConns)
+}
+
+func (h *harness) waitNoConns(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		n, ips := h.connCounts()
+		if n == 0 && ips == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("connection counters not back to zero: conns=%d ips=%d", n, ips)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestMaxConnsRejectsWith503(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{MaxConns: 2, MaxConnsPerIP: 10})
+	a, b := h.dial(t), h.dial(t)
+	a.hello("a", "")
+	b.hello("b", "")
+	_, resp, err := rawDial(h)
+	if err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("third dial: err=%v resp=%v, want 503", err, resp)
+	}
+	a.ws.Close(websocket.StatusNormalClosure, "")
+	b.ws.Close(websocket.StatusNormalClosure, "")
+	h.waitNoConns(t)
+	c := h.dial(t) // room again
+	c.hello("c", "")
+}
+
+func TestMaxConnsPerIPRejectsWith429(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{MaxConns: 100, MaxConnsPerIP: 2})
+	a, b := h.dial(t), h.dial(t)
+	a.hello("a", "")
+	b.hello("b", "")
+	_, resp, err := rawDial(h)
+	if err == nil || resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("third dial: err=%v resp=%v, want 429", err, resp)
+	}
+	if n, ips := h.connCounts(); n != 2 || ips != 1 {
+		t.Fatalf("counts = %d conns, %d ips; want 2, 1", n, ips)
+	}
+	a.ws.CloseNow()
+	b.ws.CloseNow()
+	h.waitNoConns(t)
+}
+
+func TestRejectedUpgradeDoesNotLeakCount(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{})
+	// A plain GET is not a WebSocket upgrade; Accept fails after admission.
+	for i := 0; i < 30; i++ {
+		resp, err := http.Get(h.srv.URL + "/ws")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	h.waitNoConns(t)
+}
+
+func TestHelloTimeoutClosesSilentSocket(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{HelloTimeout: 150 * time.Millisecond})
+	silent := h.dial(t)
+	greeted := h.dial(t)
+	greeted.hello("talker", "")
+	err := silent.waitClosed(2 * time.Second)
+	if s := websocket.CloseStatus(err); s != websocket.StatusPolicyViolation {
+		t.Fatalf("silent socket close = %v (%v), want policy violation", s, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := greeted.waitClosed(50 * time.Millisecond); err != nil {
+		t.Fatalf("greeted socket was closed: %v", err)
+	}
+	greeted.ws.CloseNow()
+	h.waitNoConns(t)
+}
+
+// A peer that never reads cannot answer pings and is dropped.
+func TestUnansweredPingClosesConnection(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{
+		PingInterval: 50 * time.Millisecond, PingTimeout: 100 * time.Millisecond, HelloTimeout: time.Minute})
+	nc, err := net.Dial("tcp", h.srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	fmt.Fprintf(nc, "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+	h.eventually(t, 2*time.Second, func(r *Room) bool { return len(r.conns) == 1 })
+	// Never read or write again: the server's ping gets no pong.
+	h.eventually(t, 3*time.Second, func(r *Room) bool { return len(r.conns) == 0 })
+	h.waitNoConns(t)
+}
+
+func TestCreateFactionRateLimitedPerPlayer(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{})
+	a := h.dial(t)
+	a.enterLobby("a")
+	a.send(ClientMsg{T: "createFaction"})
+	a.waitLobby(func(l LobbyMsg) bool { return l.FactionID != "" })
+	a.send(ClientMsg{T: "createFaction"})
+	e := decode[ErrorMsg](t, a.next("error", 2*time.Second))
+	if !strings.Contains(e.Message, "slow down") {
+		t.Fatalf("error = %q", e.Message)
+	}
+	// Another player is not affected.
+	b := h.dial(t)
+	b.enterLobby("b")
+	b.send(ClientMsg{T: "createFaction"})
+	b.waitLobby(func(l LobbyMsg) bool { return l.FactionID != "" })
+}
+
+func TestFactionCapReached(t *testing.T) {
+	h := newHarness(t, testConfig(), RoomOptions{MaxFactions: 2})
+	var cs []*client
+	for i := 0; i < 3; i++ {
+		c := h.dial(t)
+		c.enterLobby(fmt.Sprintf("p%d", i))
+		cs = append(cs, c)
+	}
+	for _, c := range cs[:2] {
+		c.send(ClientMsg{T: "createFaction"})
+		c.waitLobby(func(l LobbyMsg) bool { return l.FactionID != "" })
+	}
+	cs[2].send(ClientMsg{T: "createFaction"})
+	e := decode[ErrorMsg](t, cs[2].next("error", 2*time.Second))
+	if !strings.Contains(e.Message, "too many factions") {
+		t.Fatalf("error = %q", e.Message)
+	}
+}
+
+func (c *client) enterLobby(name string) {
+	c.t.Helper()
+	c.hello(name, "")
 }

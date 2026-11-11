@@ -189,3 +189,28 @@ func TestWinnerFirstToCaptures(t *testing.T) {
 		t.Fatalf("tie got %v %v", tm, done)
 	}
 }
+
+func TestDropFlagOfDropsInPlace(t *testing.T) {
+	w := newTestWorld(t, nil)
+	a := place(t, w, "a", TeamA, w.Map.FlagB)
+	w.Step(nil)
+	if !a.HasFlag {
+		t.Fatal("setup: a should carry the flag")
+	}
+	a.Pos = Pos{20, 3}
+	evs := w.DropFlagOf("a")
+	f := w.Flags[TeamB]
+	if a.HasFlag || f.Carrier != "" || f.Pos != a.Pos || len(evs) != 1 ||
+		evs[0].Kind != FlagDropped || evs[0].Player != "a" || evs[0].Pos != a.Pos || evs[0].Team != TeamB {
+		t.Fatalf("drop failed: flag=%+v hasFlag=%v evs=%v", f, a.HasFlag, evs)
+	}
+	// Standing on the dropped flag does not pick it up again.
+	w.Step(nil)
+	if a.HasFlag || w.Flags[TeamB].Carrier != "" {
+		t.Fatalf("dropper re-picked the flag: %+v", w.Flags[TeamB])
+	}
+	// The player stays in the world, and a non-carrier or unknown id is a no-op.
+	if w.Players["a"] == nil || len(w.DropFlagOf("a")) != 0 || w.DropFlagOf("nobody") != nil {
+		t.Fatal("second drop and unknown id must be no-ops")
+	}
+}

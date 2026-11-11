@@ -19,6 +19,27 @@ func (w *World) dropCarried(p *Player) bool {
 	return false
 }
 
+// DropFlagOf drops the flag pid carries, if any, at pid's position and
+// returns the FlagDropped event. The player stays in the world. It is for
+// callers outside Step, such as a disconnect.
+func (w *World) DropFlagOf(pid PlayerID) []Event {
+	p := w.Players[pid]
+	if p == nil || !p.HasFlag {
+		return nil
+	}
+	for i := range w.Flags {
+		if w.Flags[i].Carrier == pid {
+			if !w.dropCarried(p) {
+				return nil
+			}
+			p.noPickup, p.noPickupPos = true, p.Pos
+			f := &w.Flags[i]
+			return []Event{{Tick: w.Tick, Kind: FlagDropped, Player: pid, Team: f.Team, Pos: f.Pos}}
+		}
+	}
+	return nil
+}
+
 func (w *World) returnFlag(f *Flag) {
 	f.Pos = f.Home
 	f.DroppedFor = 0
@@ -98,7 +119,10 @@ func (w *World) resolveFlags(events *[]Event) {
 		}
 		for _, id := range w.order {
 			p := w.Players[id]
-			if p.Out() || p.HasFlag || p.Role != Attacker || p.Team == f.Team || p.Pos != f.Pos {
+			if p.noPickup && p.Pos != p.noPickupPos {
+				p.noPickup = false
+			}
+			if p.Out() || p.HasFlag || p.Role != Attacker || p.Team == f.Team || p.Pos != f.Pos || p.noPickup {
 				continue
 			}
 			f.Carrier = id
