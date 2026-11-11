@@ -65,6 +65,15 @@ export function drawCanvas(
       const px = x * cell, py = y * cell
       const cx = px + cell / 2, cy = py + cell / 2
       const color = c.team ? TEAM_COLOR[c.team] : '#fff'
+      if (ascii) {
+        // Text mode: every cell is one character, nothing else.
+        const out = c.player?.out
+        ctx.globalAlpha = out ? 0.35 : 1
+        ctx.fillStyle = c.kind === 'floor' ? FLOOR : c.kind === 'safe' ? SAFE : c.kind === 'obstacle' ? OBSTACLE : color
+        ctx.fillText(cellChar(c), cx, cy)
+        ctx.globalAlpha = 1
+        continue
+      }
       switch (c.kind) {
         case 'floor':
           ctx.fillStyle = FLOOR
@@ -98,18 +107,14 @@ export function drawCanvas(
           ctx.fillStyle = color
           ctx.strokeStyle = color
           ctx.lineWidth = Math.max(1, cell / 10)
-          if (ascii) {
-            ctx.fillText(cellChar(c), cx, cy)
+          if (p.glyph) {
+            ctx.fillStyle = '#fff'
+            ctx.fillText(p.glyph, cx, cy)
+            ctx.fillStyle = color
           } else {
-            if (p.glyph) {
-              ctx.fillStyle = '#fff'
-              ctx.fillText(p.glyph, cx, cy)
-              ctx.fillStyle = color
-            } else {
-              stick(ctx, cx, cy, cell)
-            }
-            if (p.hasFlag) flagGlyph(ctx, px + cell * 0.35, py - cell * 0.35, cell * 0.8, color)
+            stick(ctx, cx, cy, cell)
           }
+          if (p.hasFlag) flagGlyph(ctx, px + cell * 0.35, py - cell * 0.35, cell * 0.8, color)
           ctx.globalAlpha = 1
           if (c.kind === 'you') me = { px, py }
           break
@@ -118,7 +123,7 @@ export function drawCanvas(
     }
   }
   // Local player ring is drawn last so it is always on top.
-  if (me && !ascii) {
+  if (me) {
     ctx.strokeStyle = RING
     ctx.lineWidth = 2
     ctx.strokeRect(me.px + 1, me.py + 1, cell - 2, cell - 2)

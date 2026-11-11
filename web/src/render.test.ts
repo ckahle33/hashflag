@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renderGrid } from './render'
+import { composeGrid, cellChar, renderGrid } from './render'
 import type { MapInfo, PlayerState, StateMsg } from './protocol'
 
 function mkMap(rows: string[]): MapInfo {
@@ -105,5 +105,21 @@ describe('renderGrid', () => {
     const t0 = performance.now()
     renderGrid(mkMap(big), s, 'p0')
     expect(performance.now() - t0).toBeLessThan(20)
+  })
+})
+
+describe('text mode characters', () => {
+  it('every layer maps to its single character', () => {
+    const m = mkMap(rows)
+    const s = emptyState()
+    s.walls = [{ x: 7, y: 2, team: 'B' }]
+    s.projectiles = [{ x: 3, y: 2, dir: 0, team: 'A' }]
+    s.flags = [{ team: 'A', x: 0, y: 2, carrier: '' }]
+    s.players = [player('x', 1, 2), player('c', 2, 2, { hasFlag: true, glyph: '🐦' }), player('me', 8, 2)]
+    const cells = composeGrid(m, s, 'me')
+    const ch = (x: number, y: number) => cellChar(cells[y][x])
+    expect([ch(0, 0), ch(4, 0), ch(2, 1), ch(7, 2), ch(3, 2), ch(0, 2), ch(1, 2), ch(2, 2), ch(8, 2)])
+      .toEqual(['.', ':', '#', '|', '*', 'F', 'o', 'F', '@'])
+    expect(renderGrid(m, s, 'me')[2]).toBe('FoF*::.|@.')
   })
 })

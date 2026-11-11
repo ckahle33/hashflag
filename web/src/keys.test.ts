@@ -43,3 +43,19 @@ describe('keyToIntent', () => {
     expect(keyToIntent(null, 'W').intent).toEqual({ kind: 'move', dir: 0 })
   })
 })
+
+import { shouldIgnoreKeyTarget } from './keys'
+
+describe('shouldIgnoreKeyTarget', () => {
+  const el = (tagName: string, extra: Record<string, unknown> = {}) => ({ tagName, ...extra })
+  it('ignores form controls, buttons, links and role=button', () => {
+    for (const t of ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A']) expect(shouldIgnoreKeyTarget(el(t))).toBe(true)
+    expect(shouldIgnoreKeyTarget(el('DIV', { isContentEditable: true }))).toBe(true)
+    expect(shouldIgnoreKeyTarget(el('DIV', { getAttribute: (n: string) => (n === 'role' ? 'button' : null) }))).toBe(true)
+  })
+  it('lets game keys through otherwise', () => {
+    expect(shouldIgnoreKeyTarget(null)).toBe(false)
+    expect(shouldIgnoreKeyTarget(el('BODY'))).toBe(false)
+    expect(shouldIgnoreKeyTarget(el('DIV', { getAttribute: () => null }))).toBe(false)
+  })
+})

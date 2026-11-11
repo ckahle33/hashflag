@@ -26,3 +26,13 @@ export function keyToIntent(prefix: Prefix, key: string): { prefix: Prefix; inte
   if (k === ' ' || k === 'x') return { prefix: null, intent: { kind: 'stay' } }
   return { prefix, intent: undefined }
 }
+
+// shouldIgnoreKeyTarget is true when a key event belongs to a form control or
+// other focused widget, so game keys must not steal it.
+export function shouldIgnoreKeyTarget(el: { tagName?: string; isContentEditable?: boolean; getAttribute?: (n: string) => string | null } | null): boolean {
+  if (!el) return false
+  const tag = (el.tagName ?? '').toUpperCase()
+  if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(tag)) return true
+  if (el.isContentEditable) return true
+  return el.getAttribute?.('role') === 'button'
+}

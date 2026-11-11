@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useGame } from './useGame'
-import { keyToIntent, type Prefix } from './keys'
+import { keyToIntent, shouldIgnoreKeyTarget, type Prefix } from './keys'
 import { getItem, setItem } from './storage'
 import { Grid } from './components/Grid'
 import { Lobby } from './components/Lobby'
@@ -18,7 +18,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (shouldIgnoreKeyTarget(t)) return
       if (phase !== 'playing') return
       if (e.key === 't' || e.key === 'T') {
         setAscii((a) => {
@@ -34,8 +34,22 @@ export function App() {
       setPrefix(r.prefix)
       if (r.intent) send({ t: 'intent', ...r.intent })
     }
+    const clear = () => {
+      prefixRef.current = null
+      setPrefix(null)
+    }
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') clear()
+    }
+    if (phase !== 'playing') clear()
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('blur', clear)
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('blur', clear)
+      document.removeEventListener('visibilitychange', onVis)
+    }
   }, [phase, send])
 
   const { conn, error, dismissError } = game
