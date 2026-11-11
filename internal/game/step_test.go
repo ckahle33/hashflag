@@ -123,7 +123,7 @@ func TestMoveStopsAtObstacle(t *testing.T) {
 		t.Fatalf("edge pos = %v, want {7 0}", e.Pos)
 	}
 	// Walls block movement.
-	w.Walls[Pos{6, 4}] = Wall{Owner: "x", Team: TeamB}
+	w.Walls[Pos{6, 4}] = Wall{Owner: "x", Team: TeamB, Hits: 1}
 	f := place(t, w, "f", TeamA, Pos{6, 6})
 	w.Step(map[PlayerID]Intent{"f": move(N)})
 	if f.Pos != (Pos{6, 5}) {
@@ -317,7 +317,7 @@ func TestProjectileBreaksWall(t *testing.T) {
 	place(t, w, "a", TeamA, Pos{7, 2})
 	def := place(t, w, "d", TeamB, Pos{12, 12})
 	def.WallsPlaced = 1
-	w.Walls[Pos{9, 2}] = Wall{Owner: "d", Team: TeamB}
+	w.Walls[Pos{9, 2}] = Wall{Owner: "d", Team: TeamB, Hits: 1}
 	b := place(t, w, "b", TeamB, Pos{10, 2})
 	ev := w.Step(map[PlayerID]Intent{"a": throw(E)})
 	if _, ok := w.Walls[Pos{9, 2}]; ok {
@@ -369,21 +369,22 @@ func TestAddPlayerSpawn(t *testing.T) {
 	if w.AddPlayer(Player{ID: "d", Team: TeamA}) != nil {
 		t.Fatal("duplicate ID accepted")
 	}
-	// Fill Team A's base (25 cells minus the flag cell).
-	n := 1
-	for i := 0; ; i++ {
+	// Fill Team A's base (25 cells minus the flag cell = 24, d included).
+	for i := 0; i < 23; i++ {
 		p := w.AddPlayer(Player{ID: PlayerID("f" + string(rune('a'+i))), Team: TeamA})
-		if p == nil {
-			break
+		if p == nil || !w.Map.BaseA.Contains(p.Pos) {
+			t.Fatalf("player %d not spawned in base: %+v", i, p)
 		}
-		n++
 	}
-	if n != 24 {
-		t.Fatalf("base held %d players, want 24", n)
+	// The next one spills to the nearest cell outside the base.
+	sp := w.AddPlayer(Player{ID: "spill", Team: TeamA})
+	if sp == nil || w.Map.BaseA.Contains(sp.Pos) || sp.Pos != (Pos{0, 4}) {
+		t.Fatalf("spill spawn = %+v, want {0 4} (distance 1, lowest y then x)", sp)
 	}
 	w.RemovePlayer("d")
-	if w.Players["d"] != nil || w.AddPlayer(Player{ID: "d2", Team: TeamA}) == nil {
-		t.Fatal("RemovePlayer did not free the cell")
+	d2 := w.AddPlayer(Player{ID: "d2", Team: TeamA, Role: Defender})
+	if w.Players["d"] != nil || d2 == nil || !w.Map.BaseA.Contains(d2.Pos) {
+		t.Fatal("RemovePlayer did not free the base cell")
 	}
 }
 
@@ -448,4 +449,80 @@ func cheb(a, b Pos) int {
 		dy = -dy
 	}
 	return max(dx, dy)
+}
+
+func TestWallWithTwoHitsSurvivesFirst(t *testing.T) {
+	w := newTestWorld(t, func(c *config.Config) { c.Projectile.CooldownTicks = 0 })
+	place(t, w, "a", TeamA, Pos{7, 2})
+	def := place(t, w, "d", TeamB, Pos{12, 12})
+	def.WallsPlaced = 1
+	w.Walls[Pos{9, 2}] = Wall{Owner: "d", Team: TeamB, Hits: 2}
+	ev := w.Step(map[PlayerID]Intent{"a": throw(E)})
+	wall, ok := w.Walls[Pos{9, 2}]
+	if !ok || wall.Hits != 1 {
+		t.Fatalf("after first hit: wall=%+v ok=%v, want Hits 1", wall, ok)
+	}
+	if len(ev) != 0 || len(w.Projectiles) != 0 || def.WallsPlaced != 1 {
+		t.Fatalf("first hit: events=%v projectiles=%d walls=%d", ev, len(w.Projectiles), def.WallsPlaced)
+	}
+	ev = w.Step(map[PlayerID]Intent{"a": throw(E)})
+	if _, ok := w.Walls[Pos{9, 2}]; ok {
+		t.Fatal("wall survived second hit")
+	}
+	if def.WallsPlaced != 0 || len(ev) != 1 || ev[0].Kind != WallBroken {
+		t.Fatalf("second hit: walls=%d events=%v", def.WallsPlaced, ev)
+	}
+}
+
+func TestSpawnSpillsOutsideBaseWhenFull(t *testing.T) {
+	cfg := config.Defaults()
+	w, err := NewWorld(&cfg, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[Pos]bool{}
+	for i := 0; i < 100; i++ {
+		id := PlayerID([]byte{byte('a' + i/26), byte('a' + i%26)})
+		p := w.AddPlayer(Player{ID: id, Team: TeamA, Role: Attacker})
+		if p == nil {
+			t.Fatalf("player %d: AddPlayer returned nil", i)
+		}
+		if p.Pos.X >= w.Map.SafeX0 {
+			t.Fatalf("player %d spawned at %v, on or past safe line", i, p.Pos)
+		}
+		if seen[p.Pos] || w.Map.Obstacle[p.Pos.Y][p.Pos.X] || p.Pos == w.Map.FlagA {
+			t.Fatalf("player %d spawned at bad cell %v", i, p.Pos)
+		}
+		seen[p.Pos] = true
+	}
+	// Respawn uses the same rule: an out player comes back on its own side.
+	p := w.Players["aa"]
+	p.OutLeft = 1
+	w.Step(nil)
+	if p.Out() || p.Pos.X >= w.Map.SafeX0 {
+		t.Fatalf("respawn failed: out=%d pos=%v", p.OutLeft, p.Pos)
+	}
+}
+
+func TestAddPlayerNilWhenSideFull(t *testing.T) {
+	cfg := config.Defaults()
+	// Smallest valid map: width 11, height 5, base 3, safe line x=5.
+	// Own side is x 0..4: 25 cells minus the flag = 24 spawn cells.
+	cfg.Map = config.MapConfig{Width: 11, Height: 5, SafeLineWidth: 1, BaseSize: 3,
+		Obstacles: config.Obstacles{Generate: "scatter", Density: 0}}
+	w, err := NewWorld(&cfg, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 24; i++ {
+		if w.AddPlayer(Player{ID: PlayerID(string(rune('a' + i))), Team: TeamA}) == nil {
+			t.Fatalf("player %d: nil before side full", i)
+		}
+	}
+	if w.AddPlayer(Player{ID: "full", Team: TeamA}) != nil {
+		t.Fatal("AddPlayer succeeded with own side full")
+	}
+	if w.AddPlayer(Player{ID: "other", Team: TeamB}) == nil {
+		t.Fatal("team B blocked by team A being full")
+	}
 }

@@ -111,6 +111,7 @@ type Flag struct {
 type Wall struct {
 	Owner PlayerID
 	Team  Team
+	Hits  int // remaining hits; set from walls.hitsToBreak at placement
 }
 
 // EventKind classifies an Event.

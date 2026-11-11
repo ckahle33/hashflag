@@ -139,15 +139,23 @@ func (w *World) base(t Team) Rect {
 	return w.Map.BaseA
 }
 
-// spawnPos finds the free cell of t's base nearest the role's anchor (own
+// spawnPos finds a spawn cell for a player of team t and role r.
+//
+// First it picks the free cell of t's base nearest the role's anchor (own
 // flag for defenders, the base edge facing the safe line for attackers) by
-// Chebyshev distance, ties broken by y then x. Scanning the whole base this
-// way covers both "near the anchor" and the fallback "nearest free cell".
-// The flag home cell is never used.
+// Chebyshev distance. Scanning the whole base this way covers both "near
+// the anchor" and the fallback "nearest free cell in the base".
+//
+// If the base is full it spills to the free cell on t's own side of the map
+// (never on or past the safe line) nearest the base rectangle by Chebyshev
+// distance. It returns false only when the whole own side is full.
+//
+// Free means: in bounds, no obstacle, no wall, no flag (home or current
+// position of either flag), no player who is in. Ties are broken by y then
+// x (scan order with a strict < comparison).
 func (w *World) spawnPos(t Team, r Role) (Pos, bool) {
 	b := w.base(t)
-	home := w.Flags[t].Home
-	anchor := home
+	anchor := w.Flags[t].Home
 	if r != Defender {
 		if t == TeamA {
 			anchor.X = b.X1
@@ -155,20 +163,39 @@ func (w *World) spawnPos(t Team, r Role) (Pos, bool) {
 			anchor.X = b.X0
 		}
 	}
-	occupied := make(map[Pos]bool, len(w.Players))
+	taken := make(map[Pos]bool, len(w.Players)+4)
 	for _, p := range w.Players {
 		if !p.Out() {
-			occupied[p.Pos] = true
+			taken[p.Pos] = true
 		}
 	}
+	for _, f := range w.Flags {
+		taken[f.Home] = true
+		taken[f.Pos] = true
+	}
+	free := func(c Pos) bool { return !taken[c] && !w.blocked(c) }
+
+	if c, ok := nearestFree(b, free, func(c Pos) int { return chebyshev(c, anchor) }); ok {
+		return c, true
+	}
+	side := Rect{0, 0, w.Map.SafeX0 - 1, w.Map.Height - 1}
+	if t == TeamB {
+		side = Rect{w.Map.SafeX1 + 1, 0, w.Map.Width - 1, w.Map.Height - 1}
+	}
+	return nearestFree(side, free, func(c Pos) int { return rectDist(c, b) })
+}
+
+// nearestFree returns the free cell in r with the smallest dist, ties
+// broken by y then x.
+func nearestFree(r Rect, free func(Pos) bool, dist func(Pos) int) (Pos, bool) {
 	best, bestD, found := Pos{}, 0, false
-	for y := b.Y0; y <= b.Y1; y++ {
-		for x := b.X0; x <= b.X1; x++ {
+	for y := r.Y0; y <= r.Y1; y++ {
+		for x := r.X0; x <= r.X1; x++ {
 			c := Pos{x, y}
-			if c == home || occupied[c] || w.blocked(c) {
+			if !free(c) {
 				continue
 			}
-			if d := chebyshev(c, anchor); !found || d < bestD {
+			if d := dist(c); !found || d < bestD {
 				best, bestD, found = c, d, true
 			}
 		}
@@ -178,6 +205,11 @@ func (w *World) spawnPos(t Team, r Role) (Pos, bool) {
 
 func chebyshev(a, b Pos) int {
 	return max(abs(a.X-b.X), abs(a.Y-b.Y))
+}
+
+// rectDist is the Chebyshev distance from p to the nearest cell of r.
+func rectDist(p Pos, r Rect) int {
+	return max(r.X0-p.X, p.X-r.X1, r.Y0-p.Y, p.Y-r.Y1, 0)
 }
 
 func abs(v int) int {
@@ -408,10 +440,11 @@ func (w *World) launchThrows(intents map[PlayerID]Intent) {
 type hit struct{ victim, owner PlayerID }
 
 // advanceProjectiles is step 4. Projectiles advance in slice order. Each
-// checks every cell it enters: it vanishes at an edge or obstacle; breaks a
-// wall and vanishes; hits eligible players in the cell (enemies, or anyone
-// but the thrower with friendly fire; players on the safe line are passed
-// over) and vanishes unless piercing; and vanishes on reaching its range.
+// checks every cell it enters: it vanishes at an edge or obstacle; deals one
+// hit to a wall and vanishes; hits eligible players in the cell (enemies, or
+// anyone but the thrower with friendly fire; players on the safe line are
+// passed over) and vanishes unless piercing; and vanishes on reaching its
+// range.
 func (w *World) advanceProjectiles(events *[]Event) []hit {
 	if len(w.Projectiles) == 0 {
 		return nil
@@ -442,7 +475,7 @@ func (w *World) advanceProjectiles(events *[]Event) []hit {
 			pr.Pos = next
 			pr.Traveled++
 			if wall, ok := w.Walls[next]; ok {
-				w.breakWall(next, wall, pr.Owner, events)
+				w.hitWall(next, wall, pr.Owner, events)
 				alive = false
 				break
 			}
@@ -470,7 +503,14 @@ func (w *World) advanceProjectiles(events *[]Event) []hit {
 	return hits
 }
 
-func (w *World) breakWall(pos Pos, wall Wall, by PlayerID, events *[]Event) {
+// hitWall takes one hit off the wall at pos. The wall is removed (freeing
+// its owner's slot and emitting WallBroken) only when no hits remain.
+func (w *World) hitWall(pos Pos, wall Wall, by PlayerID, events *[]Event) {
+	wall.Hits--
+	if wall.Hits > 0 {
+		w.Walls[pos] = wall
+		return
+	}
 	delete(w.Walls, pos)
 	if o := w.Players[wall.Owner]; o != nil && o.WallsPlaced > 0 {
 		o.WallsPlaced--
