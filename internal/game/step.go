@@ -444,7 +444,10 @@ type hit struct{ victim, owner PlayerID }
 // hit to a wall and vanishes; hits eligible players in the cell (enemies, or
 // anyone but the thrower with friendly fire; players on the safe line are
 // passed over) and vanishes unless piercing; and vanishes on reaching its
-// range.
+// range. A non-piercing projectile hits only the first eligible player in a
+// cell (lowest PlayerID). An in-flight projectile (Traveled > 0) first
+// checks its starting cell, since players moved earlier this tick may have
+// stepped onto it.
 func (w *World) advanceProjectiles(events *[]Event) []hit {
 	if len(w.Projectiles) == 0 {
 		return nil
@@ -464,8 +467,25 @@ func (w *World) advanceProjectiles(events *[]Event) []hit {
 			g := w.Cfg.Projectile
 			speed, rng, pierce, ff = g.CellsPerTick, g.RangeCells, g.Pierce, g.FriendlyFire
 		}
+		// hitAt records hits on eligible players at c (at[c] is in sorted ID
+		// order) and reports whether the projectile survives.
+		hitAt := func(c Pos) bool {
+			if safe && w.onSafeLine(c) {
+				return true
+			}
+			for _, v := range at[c] {
+				if v.ID == pr.Owner || (v.Team == pr.Team && !ff) {
+					continue
+				}
+				hits = append(hits, hit{victim: v.ID, owner: pr.Owner})
+				if !pierce {
+					return false
+				}
+			}
+			return true
+		}
 		d := pr.Dir.Delta()
-		alive := true
+		alive := pr.Traveled == 0 || hitAt(pr.Pos)
 		for i := 0; i < speed && alive; i++ {
 			next := Pos{pr.Pos.X + d.X, pr.Pos.Y + d.Y}
 			if !w.inBounds(next) || w.Map.Obstacle[next.Y][next.X] {
@@ -479,17 +499,7 @@ func (w *World) advanceProjectiles(events *[]Event) []hit {
 				alive = false
 				break
 			}
-			if !(safe && w.onSafeLine(next)) {
-				for _, v := range at[next] {
-					if v.ID == pr.Owner || (v.Team == pr.Team && !ff) {
-						continue
-					}
-					hits = append(hits, hit{victim: v.ID, owner: pr.Owner})
-					if !pierce {
-						alive = false
-					}
-				}
-			}
+			alive = hitAt(next)
 			if pr.Traveled >= rng {
 				alive = false
 			}

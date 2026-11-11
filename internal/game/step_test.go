@@ -526,3 +526,35 @@ func TestAddPlayerNilWhenSideFull(t *testing.T) {
 		t.Fatal("team B blocked by team A being full")
 	}
 }
+
+func TestEnemyStepsOntoRestingProjectile(t *testing.T) {
+	w := newTestWorld(t, nil)
+	place(t, w, "a", TeamA, Pos{7, 2})
+	b := place(t, w, "b", TeamB, Pos{10, 2})
+	w.Step(map[PlayerID]Intent{"a": throw(E)})
+	if len(w.Projectiles) != 1 || w.Projectiles[0].Pos != (Pos{9, 2}) || b.Out() {
+		t.Fatalf("setup: projectiles=%+v b.out=%d", w.Projectiles, b.OutLeft)
+	}
+	ev := w.Step(map[PlayerID]Intent{"b": move(W_)})
+	want := []Event{{Tick: 1, Kind: Tagged, Player: "b", Other: "a", Team: TeamB, Pos: Pos{9, 2}}}
+	if !reflect.DeepEqual(ev, want) {
+		t.Fatalf("events = %+v, want %+v", ev, want)
+	}
+	if len(w.Projectiles) != 0 {
+		t.Fatal("projectile should vanish on hit")
+	}
+}
+
+func TestNonPiercingHitsOnlyOneStackedEnemy(t *testing.T) {
+	w := newTestWorld(t, func(c *config.Config) { c.Movement.Stackable = true })
+	place(t, w, "a", TeamA, Pos{7, 2})
+	b2 := place(t, w, "b2", TeamB, Pos{9, 2})
+	b1 := place(t, w, "b1", TeamB, Pos{9, 2})
+	ev := w.Step(map[PlayerID]Intent{"a": throw(E)})
+	if len(ev) != 1 || ev[0].Kind != Tagged || ev[0].Player != "b1" {
+		t.Fatalf("events = %+v, want exactly one Tagged for b1", ev)
+	}
+	if !b1.Out() || b2.Out() {
+		t.Fatalf("b1.out=%d b2.out=%d, want only b1 out", b1.OutLeft, b2.OutLeft)
+	}
+}
