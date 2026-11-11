@@ -105,3 +105,19 @@ func TestTopOrderingAndLimit(t *testing.T) {
 		t.Fatal("Top(0)")
 	}
 }
+
+func TestNewBoardIsEmptyAndSaves(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "board.json")
+	b := NewBoard(path)
+	if len(b.Top(5)) != 0 {
+		t.Fatal("new board should be empty")
+	}
+	b.AddCapture("Damp Pigeons")
+	if err := b.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadBoard(path)
+	if err != nil || len(got.Top(5)) != 1 {
+		t.Fatalf("reload = %v, %v", got.Top(5), err)
+	}
+}

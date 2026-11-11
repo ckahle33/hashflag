@@ -116,3 +116,9 @@ func (b *Board) Save() error {
 	}
 	return nil
 }
+
+// NewBoard returns an empty board that saves to path. Use it when LoadBoard
+// fails and the server should still run (and try to save later).
+func NewBoard(path string) *Board {
+	return &Board{path: path, counts: map[string]int{}}
+}
