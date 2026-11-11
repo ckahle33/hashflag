@@ -46,3 +46,92 @@ type Map struct {
 	BaseA, BaseB   Rect
 	FlagA, FlagB   Pos
 }
+
+// PlayerID uniquely identifies a player.
+type PlayerID string
+
+// IntentKind is what a player asked to do this tick.
+type IntentKind int
+
+const (
+	Stay IntentKind = iota
+	Move
+	Throw
+	PlaceWall
+)
+
+// Intent is one player's queued action for a tick.
+type Intent struct {
+	Kind IntentKind
+	Dir  Dir
+}
+
+// Player is a participant on the board. A player with OutLeft > 0 is out
+// (tagged): not on the grid for collision, targeting or refill purposes.
+type Player struct {
+	ID           PlayerID
+	Name         string
+	FactionID    string
+	Team         Team
+	Role         Role
+	Pos          Pos
+	Ammo         int
+	CooldownLeft int
+	OutLeft      int
+	HasFlag      bool
+	WallsPlaced  int
+}
+
+// Out reports whether the player is currently tagged out.
+func (p *Player) Out() bool { return p.OutLeft > 0 }
+
+// Projectile is a thrown object in flight.
+type Projectile struct {
+	Pos      Pos
+	Dir      Dir
+	Owner    PlayerID
+	Team     Team
+	Traveled int
+
+	// Flight parameters captured from the thrower's role at launch. Zero
+	// speed means "use the global projectile config".
+	speed, rangeCells    int
+	pierce, friendlyFire bool
+}
+
+// Flag is a team's flag. Carrier is empty when nobody holds it.
+type Flag struct {
+	Team       Team
+	Home, Pos  Pos
+	Carrier    PlayerID
+	DroppedFor int
+}
+
+// Wall is a placed wall cell.
+type Wall struct {
+	Owner PlayerID
+	Team  Team
+}
+
+// EventKind classifies an Event.
+type EventKind int
+
+const (
+	Tagged EventKind = iota
+	FlagPickedUp
+	FlagDropped
+	FlagReturned
+	Captured
+	WallPlaced
+	WallBroken
+)
+
+// Event is something notable that happened during a tick.
+type Event struct {
+	Tick   int
+	Kind   EventKind
+	Player PlayerID
+	Other  PlayerID
+	Team   Team
+	Pos    Pos
+}
