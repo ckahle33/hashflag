@@ -11,6 +11,9 @@ const (
 	TeamB
 )
 
+// NoTeam is the Winner result for a tie.
+const NoTeam Team = -1
+
 // Role is a player's current role.
 type Role int
 

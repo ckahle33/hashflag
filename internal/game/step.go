@@ -16,7 +16,7 @@ type World struct {
 	Walls       map[Pos]Wall
 	Flags       [2]Flag // indexed by the team that owns the flag
 	Tick        int
-	Scores      [2]int
+	scores      [2]int // captures per team; read via Scores()
 
 	order     []PlayerID   // sorted player IDs; all ordered iteration uses this
 	stats     [2]roleStats // effective per-role stats, indexed by Role
@@ -127,6 +127,7 @@ func (w *World) RemovePlayer(id PlayerID) {
 	if _, ok := w.Players[id]; !ok {
 		return
 	}
+	w.dropCarried(w.Players[id])
 	delete(w.Players, id)
 	i := sort.Search(len(w.order), func(i int) bool { return w.order[i] >= id })
 	w.order = append(w.order[:i], w.order[i+1:]...)
@@ -544,9 +545,6 @@ func (w *World) applyTags(hits []hit, events *[]Event) {
 
 // resolvePlacements is step 6a: wall placement (Task 5).
 func (w *World) resolvePlacements(intents map[PlayerID]Intent, events *[]Event) {}
-
-// resolveFlags is step 6b: flag pickup, drop, return and capture (Task 4).
-func (w *World) resolveFlags(events *[]Event) {}
 
 // refillAmmo is step 7.
 func (w *World) refillAmmo() {
